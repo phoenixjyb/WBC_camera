@@ -1,4 +1,4 @@
-function plot_joint_trajectories(timeVec, jointTraj, jointNames)
+function fig = plot_joint_trajectories(timeVec, jointTraj, jointNames)
 %PLOT_JOINT_TRAJECTORIES Plot joint positions vs time.
 %   plot_joint_trajectories(timeVec, jointTraj, jointNames) creates a figure
 %   with joint angles (radians) over the provided time vector.
@@ -22,7 +22,7 @@ end
 fig = figure('Name', 'Arm Joint Trajectories', 'Color', 'w');
 ax = axes('Parent', fig); hold(ax, 'on'); grid(ax, 'on');
 plot(ax, timeVec, jointTraj, 'LineWidth', 1.5);
-xlabel(ax, 'Time [s]'); ylabel(ax, 'Joint position [rad]');
+xlabel(ax, 'Time (s)'); ylabel(ax, 'Joint position (rad)');
 if nargin >= 3 && numel(jointNames) == size(jointTraj,2)
     legend(ax, jointNames, 'Location', 'bestoutside');
 end

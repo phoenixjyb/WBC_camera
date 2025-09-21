@@ -55,6 +55,27 @@ else
     playbackSpeed = 2.0;
 end
 
+if exist('output_dir', 'var') && ~isempty(output_dir)
+    outputDir = string(output_dir);
+else
+    outputDir = string(fullfile(pwd, 'outputs'));
+end
+if ~isfolder(outputDir)
+    mkdir(outputDir);
+end
+
+if strlength(trajFileLocal) > 0
+    [~, outputBase, ~] = fileparts(trajFileLocal);
+else
+    outputBase = char(trajSourceLocal);
+end
+
+if strlength(videoFile) == 0
+    videoFile = fullfile(outputDir, outputBase + "_animation.mp4");
+elseif ~startsWith(videoFile, "/") && ~contains(videoFile, ":/")
+    videoFile = fullfile(outputDir, videoFile);
+end
+
 %% Load robot model
 thisDir = fileparts(mfilename('fullpath'));
 addpath(thisDir); % ensure helper packages/functions are reachable
@@ -164,8 +185,39 @@ poseHistory = [baseX, baseY, theta];
 cmdHistory = [vBase(:), omegaBase(:)];
 tVec = armTimes;
 
+% Interpolate desired end-effector positions to synchronized timeline
+if armTimes(end) > armTimes(1)
+    timeParam = (armTimes - armTimes(1)) / (armTimes(end) - armTimes(1));
+else
+    timeParam = zeros(size(armTimes));
+end
+if refTimes(end) > refTimes(1)
+    timeParamRef = (refTimes - refTimes(1)) / (refTimes(end) - refTimes(1));
+else
+    timeParamRef = zeros(size(refTimes));
+end
+desiredEEInterp = interp1(timeParamRef, refPositionsWorld, timeParam, 'pchip', 'extrap');
+
+% Compute actual end-effector metrics in world frame
+eeMetrics = helpers.compute_ee_metrics(robot, armJointNames, armTrajectory, poseHistory, tVec, eeName);
+
+% Base velocities in longitudinal/lateral components
+vx_world = gradient(baseX, tVec);
+vy_world = gradient(baseY, tVec);
+v_long = vx_world .* cos(theta) + vy_world .* sin(theta);
+v_lat  = -vx_world .* sin(theta) + vy_world .* cos(theta);
+
+% End-effector error metrics
+eeErrorVec = desiredEEInterp - eeMetrics.positions;
+eeErrorNorm = sqrt(sum(eeErrorVec.^2, 2));
+
+% End-effector kinematic magnitudes
+eeSpeed = eeMetrics.speed;
+eeAccelMag = eeMetrics.accel_mag;
+eeJerkMag = eeMetrics.jerk_mag;
+
 %% Visualize planar motion
-figure('Name', 'Planar Base Path'); hold on; grid on; axis equal;
+figPlanar = figure('Name', 'Planar Base Path'); hold on; grid on; axis equal;
 plot(rawBaseWaypoints(:,1), rawBaseWaypoints(:,2), 'k--o', 'DisplayName', 'Raw waypoints');
 plot(baseWaypointsRef(:,1), baseWaypointsRef(:,2), 'c-.', 'LineWidth', 1.0, 'DisplayName', 'Smoothed ref');
 plot(baseX, baseY, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Synchronized path');
@@ -173,7 +225,7 @@ scatter(baseX(1), baseY(1), 70, 'filled', 'MarkerFaceColor', [0.1 0.7 0.2], 'Dis
 scatter(baseX(end), baseY(end), 70, 'filled', 'MarkerFaceColor', [0.8 0.2 0.2], 'DisplayName', 'End');
 quiver(baseX(1:10:end), baseY(1:10:end), cos(theta(1:10:end))*0.1, sin(theta(1:10:end))*0.1, 0, ...
        'Color', [0 0.4 0.8], 'DisplayName', 'Heading');
-xlabel('X [m]'); ylabel('Y [m]'); legend('Location','bestoutside');
+xlabel('X (m)'); ylabel('Y (m)'); legend('Location','bestoutside');
 title('Chassis trajectory synchronized with arm timeline');
 
 %% Summaries
@@ -193,23 +245,51 @@ results.baseCmd = cmdHistory;
 results.baseWaypoints = baseWaypointsRef;
 results.baseWaypointsRaw = rawBaseWaypoints;
 results.baseSyncScale = scaleFactor;
-results.eePoses = traj.eePoses;
+results.baseVelocityLong = v_long;
+results.baseVelocityLat = v_lat;
+results.eeDesired = desiredEEInterp;
+results.eeActual = eeMetrics;
+results.eeErrorNorm = eeErrorNorm;
+results.eeErrorVec = eeErrorVec;
+results.eeSpeed = eeSpeed;
+results.eeAccelMag = eeAccelMag;
+results.eeJerkMag = eeJerkMag;
 results.referenceTimes = refTimes;
 results.retime = retimeInfo;
 assignin('base', 'rt_results', results);
 assignin('base', 'rt_ikInfos', ikInfos);
 
 %% Plots & animation
-helpers.plot_joint_trajectories(armTimes, armTrajectory, armJointNames);
-helpers.plot_chassis_profile(tVec, poseHistory);
+figEECompare = helpers.plot_ee_comparison(desiredEEInterp, eeMetrics.positions, poseHistory);
+perfFigs = helpers.plot_performance_metrics(tVec, struct( ...
+    'errorNorm', eeErrorNorm, ...
+    'base', struct('x', baseX, 'y', baseY, 'yaw', theta, ...
+                   'v_long', v_long, 'v_lat', v_lat, 'omega', omegaBase), ...
+    'armAngles', armTrajectory, ...
+    'armJointNames', {armJointNames}, ...
+    'eeSpeed', eeSpeed, 'eeAccel', eeAccelMag, 'eeJerk', eeJerkMag));
+figJoint = helpers.plot_joint_trajectories(armTimes, armTrajectory, armJointNames);
+figChassis = helpers.plot_chassis_profile(tVec, poseHistory);
 if animateRobot
     args = {'EndEffectorName', string(eeName), 'PlaybackSpeed', playbackSpeed};
     if strlength(videoFile) > 0
-        args = [args, {'VideoFile', videoFile}, {'VideoFrameRate', videoFrameRate}]; %#ok<AGROW>
+        args = [args, {'VideoFile', string(videoFile)}, {'VideoFrameRate', videoFrameRate}]; %#ok<AGROW>
     end
     helpers.animate_whole_body(robot, armJointNames, armTrajectory, armTimes, ...
-        poseHistory, tVec, traj.eePoses, args{:});
+        poseHistory, tVec, desiredEEInterp, args{:});
 end
+
+resultsFile = fullfile(outputDir, outputBase + "_results.mat");
+save(char(resultsFile), 'results', 'ikInfos');
+
+exportgraphics(figPlanar, char(fullfile(outputDir, outputBase + "_planar_path.png")), 'Resolution', 200);
+exportgraphics(figEECompare, char(fullfile(outputDir, outputBase + "_ee_compare.png")), 'Resolution', 200);
+exportgraphics(figJoint, char(fullfile(outputDir, outputBase + "_arm_joints.png")), 'Resolution', 200);
+exportgraphics(figChassis, char(fullfile(outputDir, outputBase + "_chassis_profile.png")), 'Resolution', 200);
+exportgraphics(perfFigs.error, char(fullfile(outputDir, outputBase + "_error_norm.png")), 'Resolution', 200);
+exportgraphics(perfFigs.base, char(fullfile(outputDir, outputBase + "_base_states.png")), 'Resolution', 200);
+exportgraphics(perfFigs.arm, char(fullfile(outputDir, outputBase + "_arm_angles_grid.png")), 'Resolution', 200);
+exportgraphics(perfFigs.ee, char(fullfile(outputDir, outputBase + "_ee_kinematics.png")), 'Resolution', 200);
 
 %% Helper functions =====================================================
 function maxCurvature = estimate_max_curvature(segmentDist, thetaRef)

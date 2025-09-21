@@ -1,4 +1,4 @@
-function plot_chassis_profile(timeVec, basePose)
+function fig = plot_chassis_profile(timeVec, basePose)
 %PLOT_CHASSIS_PROFILE Plot chassis x, y, and yaw vs time along with XY path.
 %
 %   plot_chassis_profile(timeVec, basePose) generates a figure with three
@@ -24,19 +24,19 @@ fig = figure('Name', 'Chassis Profiles', 'Color', 'w');
 tiledlayout(fig, 4, 1, 'TileSpacing', 'compact');
 
 nexttile; plot(timeVec, basePose(:,1), 'LineWidth', 1.5);
-ylabel('x [m]'); grid on;
+ylabel('x (m)'); grid on;
 
 nexttile; plot(timeVec, basePose(:,2), 'LineWidth', 1.5);
-ylabel('y [m]'); grid on;
+ylabel('y (m)'); grid on;
 
 nexttile; plot(timeVec, yawDeg, 'LineWidth', 1.5);
-ylabel('\psi [deg]'); grid on;
+ylabel('\psi (deg)'); grid on;
 
 axPath = nexttile([1 1]);
 plot(axPath, basePose(:,1), basePose(:,2), 'k-', 'LineWidth', 1.5);
 hold(axPath, 'on'); plot(axPath, basePose(1,1), basePose(1,2), 'go', 'MarkerFaceColor', 'g');
 plot(axPath, basePose(end,1), basePose(end,2), 'ro', 'MarkerFaceColor', 'r');
 axis(axPath, 'equal'); grid(axPath, 'on');
-xlabel(axPath, 'x [m]'); ylabel(axPath, 'y [m]');
+xlabel(axPath, 'x (m)'); ylabel(axPath, 'y (m)');
 title(axPath, 'Planar Chassis Path');
 end

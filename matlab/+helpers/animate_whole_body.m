@@ -61,7 +61,7 @@ baseYaw = wrapToPi(baseYawUnwrapped);
 % Prepare figure
 fig = figure('Name', 'Whole-Body Animation', 'Color', 'w');
 ax = axes('Parent', fig); hold(ax, 'on'); grid(ax, 'on'); axis(ax, 'equal');
-xlabel(ax, 'X [m]'); ylabel(ax, 'Y [m]'); zlabel(ax, 'Z [m]');
+xlabel(ax, 'X (m)'); ylabel(ax, 'Y (m)'); zlabel(ax, 'Z (m)');
 view(ax, 45, 25);
 
 % Plot reference paths

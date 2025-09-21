@@ -3,7 +3,7 @@
 This folder outlines a MATLAB-based control workflow that mirrors the ROS 2 whole-body execution stack. Use these scripts to prototype controller behavior, tune parameters, and validate trajectories before wiring into ROS.
 
 ## Contents
-- `whole_body_controller.m` — top-level script coordinating trajectory ingestion, splitting, and command generation.
+- `moveit_joint_trajectory_playback.m` — top-level script coordinating trajectory ingestion, splitting, and command generation for MoveIt-generated joint paths.
 - `split_trajectory.m` — function that separates MoveIt joint trajectories into planar and arm components.
 - `diff_drive_tracker.m` — pure-pursuit-like tracker that converts planar paths into linear/angular velocity commands with curvature and acceleration limits.
 - `arm_joint_controller.m` — stub illustrating how to forward arm joint trajectories to a low-level driver or simulator.
@@ -32,7 +32,7 @@ Tune `limits` and tracker gains in MATLAB and port the validated values back int
 - `generate_external_trajectory.m` — factory for demo and file-based trajectories (MAT/JSON/CSV) that feed both EE and base paths.
   Built-in presets: `demo_arc`, `demo_line`, `dolly_forward`, `orbit_left`, `crane_up`, `pan_tilt`.
   When loading JSON poses (e.g. `1_pull_world.json`), the script interpolates/smooths the chassis path, retimes the arm and base on a shared timeline, and enforces base velocity/yaw limits before generating commands.
-  JSON pose sequences are assumed to be sampled at 100 ms; the loader densifies any segment that would exceed the configurable camera speed limit (default 3 m/s) to keep position deltas realistic.
+  JSON pose sequences are assumed to be sampled at 100 ms; the loader densifies any segment that would exceed the configurable camera speed limit (default 3 m/s) to keep position deltas realistic. All analysis plots, synchronized trajectories, and animation videos are exported to `matlab/outputs/` (or a custom `output_dir`) for easier inspection.
 - `run_camera_motion_tests.m` — batch runner that exercises the presets (no animation) and prints joint/base speed summaries.
 - Sample external trajectory: drop a JSON with a `poses` array (position + quaternion) into this folder and run
   ```matlab
