@@ -1,0 +1,16 @@
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+controller_names:
+  - fake_whole_body_controller
+
+fake_whole_body_controller:
+  type: FakeController
+  joints:
+    - world_joint/x
+    - world_joint/y
+    - world_joint/theta
+    - left_arm_joint1
+    - left_arm_joint2
+    - left_arm_joint3
+    - left_arm_joint4
+    - left_arm_joint5
+    - left_arm_joint6

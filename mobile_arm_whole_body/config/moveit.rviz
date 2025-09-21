@@ -1,0 +1,11 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Displays:
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Name: MotionPlanning
+      Planning Request:
+        Planning Group: whole_body
+  Global Options:
+    Fixed Frame: odom

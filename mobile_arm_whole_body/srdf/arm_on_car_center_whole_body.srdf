@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot name="left_arm_extracted">
+  <virtual_joint name="world_joint" type="planar" parent_frame="odom" child_link="chassis_center_link"/>
+  <group name="manipulator">
+    <chain base_link="left_arm_base_link" tip_link="left_gripper_link"/>
+  </group>
+  <group name="mobile_base">
+    <joint name="world_joint"/>
+  </group>
+  <group name="whole_body">
+    <group name="mobile_base"/>
+    <group name="manipulator"/>
+  </group>
+</robot>
