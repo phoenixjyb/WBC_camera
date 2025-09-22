@@ -147,19 +147,8 @@ if any(~foundJoints)
 end
 armTrajectoryNominal = qMatrixNominal(:, armIdx);
 
-[baseWaypointsRef, baseRefineInfo] = refine_base_waypoints(robot, armJointNames, armTrajectoryNominal, thetaRefNominal, refPositionsWorld, baseWaypointsNominal, eeName);
-if isempty(baseWaypointsRef)
-    baseWaypointsRef = baseWaypointsNominal;
-    baseRefineInfo.applied = false;
-else
-    baseRefineInfo.applied = true;
-    baseWaypointsRef(1,:) = rawBaseWaypoints(1,:);
-    baseWaypointsRef(end,:) = rawBaseWaypoints(end,:);
-    if rampInfo.steps > 0
-        keepIdx = 1:min(rampInfo.steps, size(baseWaypointsRef,1));
-        baseWaypointsRef(keepIdx, :) = baseWaypointsNominal(keepIdx, :);
-    end
-end
+baseWaypointsRef = baseWaypointsNominal;
+baseRefineInfo = struct('applied', false, 'reason', "disabled", 'maxShift', 0, 'meanShift', 0);
 
 [thetaRef, arcLen, segmentDist] = compute_base_heading(baseWaypointsRef);
 poseTformsBase = build_base_to_ee_targets(baseWaypointsRef, thetaRef, refPositionsWorld, refRPYWorld);
