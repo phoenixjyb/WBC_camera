@@ -1,0 +1,8 @@
+# Generated media and analytics outputs
+matlab/outputs/*.mp4
+matlab/outputs/*.png
+matlab/outputs/*.mat
+
+# macOS metadata
+.DS_Store
+matlab/.DS_Store

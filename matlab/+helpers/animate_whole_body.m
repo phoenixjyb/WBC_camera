@@ -36,6 +36,40 @@ arguments
     options.VideoFile string = ""
     options.VideoFrameRate double = 30
     options.EndEffectorName string = "left_gripper_link"
+    options.VisualAlpha double = 0.6
+    options.HideEndEffectorVisual logical = false
+    options.ChassisMesh string = ""
+    options.ChassisColor (1,3) double = [0.4 0.4 0.4]
+    options.ChassisAlpha double = 0.35
+    options.ChassisScale double = 1e-3
+    options.StageBreakIndex double = 1
+    options.StageLabels (1,:) string = ["Ramp-up", "Tracking"]
+end
+
+if options.VisualAlpha < 0 || options.VisualAlpha > 1
+    error('options.VisualAlpha must be within [0, 1].');
+end
+if options.ChassisScale <= 0
+    error('options.ChassisScale must be positive.');
+end
+stageLabels = string(options.StageLabels);
+if numel(stageLabels) < 2
+    stageLabels = [stageLabels, repmat(stageLabels(end), 1, 2-numel(stageLabels))];
+end
+stageBreak = max(1, round(options.StageBreakIndex));
+
+% Work on a copy so visual tweaks don't leak back to caller
+robot = copy(robot);
+eeName = char(options.EndEffectorName);
+if options.HideEndEffectorVisual
+    try
+        eeBody = copy(getBody(robot, eeName));
+        clearVisual(eeBody);
+        replaceBody(robot, eeName, eeBody);
+    catch
+        warning('animate_whole_body:FailedToHideEE', ...
+            'Unable to hide end-effector visual for body %s.', eeName);
+    end
 end
 
 % Validate sizes
@@ -43,6 +77,7 @@ numSteps = size(armTrajectory, 1);
 if numSteps ~= numel(armTimes)
     error('armTrajectory rows (%d) must match numel(armTimes) (%d).', numSteps, numel(armTimes));
 end
+stageBreak = min(stageBreak, numSteps + 1);
 if size(basePose,2) ~= 3
     error('basePose must be K-by-3 with columns [x y yaw].');
 end
@@ -59,19 +94,24 @@ baseYawUnwrapped = interp1(baseTimes, unwrap(basePose(:,3)), armTimes, 'linear',
 baseYaw = wrapToPi(baseYawUnwrapped);
 
 % Prepare figure
-fig = figure('Name', 'Whole-Body Animation', 'Color', 'w');
-ax = axes('Parent', fig); hold(ax, 'on'); grid(ax, 'on'); axis(ax, 'equal');
-xlabel(ax, 'X (m)'); ylabel(ax, 'Y (m)'); zlabel(ax, 'Z (m)');
+fig = figure('Name', 'Whole-Body Animation', 'Color', [0.15 0.15 0.15]);
+ax = axes('Parent', fig, 'Color', [0.05 0.05 0.05], 'XColor', [0.9 0.9 0.9], ...
+    'YColor', [0.9 0.9 0.9], 'ZColor', [0.9 0.9 0.9], 'GridColor', [0.35 0.35 0.35]);
+hold(ax, 'on'); grid(ax, 'on'); axis(ax, 'equal');
+xlabel(ax, 'X (m)', 'Color', [0.9 0.9 0.9]);
+ylabel(ax, 'Y (m)', 'Color', [0.9 0.9 0.9]);
+zlabel(ax, 'Z (m)', 'Color', [0.9 0.9 0.9]);
 view(ax, 45, 25);
 
 % Plot reference paths
-plot(ax, basePose(:,1), basePose(:,2), 'k--', 'LineWidth', 1.0, 'DisplayName', 'Chassis path');
+plot(ax, basePose(:,1), basePose(:,2), '--', 'Color', [0.85 0.7 0.1], 'LineWidth', 1.0, 'DisplayName', 'Chassis path');
 if ~isempty(eePoses) && size(eePoses,2) >= 3
     plot3(ax, eePoses(:,1), eePoses(:,2), eePoses(:,3), 'r-.', 'LineWidth', 1.0, 'DisplayName', 'Desired EE path');
 end
 actualEE = nan(numSteps,3);
-actualLine = plot3(ax, nan, nan, nan, 'Color', [0 0.6 0], 'LineWidth', 1.5, 'DisplayName', 'Actual EE path');
-legend(ax, 'Location', 'bestoutside');
+actualLine = plot3(ax, nan, nan, nan, 'Color', [0 0.7 0.2], 'LineWidth', 1.5, 'DisplayName', 'Actual EE path');
+leg = legend(ax, 'Location', 'bestoutside');
+set(leg, 'TextColor', [0.95 0.95 0.95], 'Color', [0.2 0.2 0.2]);
 
 % Markers for current pose
 baseMarker = plot3(ax, baseX(1), baseY(1), 0, 'bo', 'MarkerFaceColor', 'b');
@@ -85,6 +125,9 @@ else
     eeMarker = [];
 end
 actualMarker = plot3(ax, baseX(1), baseY(1), 0, 's', 'Color', [0.0 0.6 0.2], 'MarkerFaceColor', [0.0 0.6 0.2], 'DisplayName', 'Actual EE');
+stageText = text(ax, 'Units', 'normalized', 'Position', [0.02 0.95 0], ...
+    'String', '', 'Color', [0.95 0.95 0.95], 'FontSize', 12, 'FontWeight', 'bold', ...
+    'BackgroundColor', [0.1 0.1 0.1], 'Margin', 4, 'HorizontalAlignment', 'left');
 
 % Map joint names
 configTemplate = homeConfiguration(robot);
@@ -100,9 +143,34 @@ for j = 1:numel(armJointNames)
 end
 
 % Animation loop
-robotHandles = gobjects(0);
 hg = hgtransform('Parent', ax);
-eeName = char(options.EndEffectorName);
+chassisPatch = [];
+
+% Attempt to load chassis/support mesh once so it follows the base hgtransform
+meshPath = string(options.ChassisMesh);
+if strlength(meshPath) == 0
+    helpersDir = fileparts(mfilename('fullpath')); % .../matlab/+helpers
+    matlabDir = fileparts(helpersDir);
+    defaultMesh = fullfile(matlabDir, '..', 'mobile_arm_whole_body', 'meshes', 'cr_no_V.stl');
+    meshPath = string(defaultMesh);
+end
+if exist(meshPath, 'file') == 2
+    try
+        triData = stlread(meshPath);
+        chassisVertices = triData.Points * options.ChassisScale;
+        chassisPatch = patch('Parent', hg, 'Faces', triData.ConnectivityList, ...
+            'Vertices', chassisVertices, 'FaceColor', options.ChassisColor, ...
+            'FaceAlpha', options.ChassisAlpha, 'EdgeColor', 'none', ...
+            'DisplayName', 'Chassis model');
+    catch ME
+        warning('animate_whole_body:ChassisMeshFailed', ...
+            'Failed to load chassis mesh from %s (%s).', meshPath, ME.message);
+        chassisPatch = [];
+    end
+else
+    warning('animate_whole_body:ChassisMeshMissing', ...
+        'Chassis mesh file %s not found. Skipping static chassis visual.', meshPath);
+end
 
 videoWriter = [];
 if strlength(options.VideoFile) > 0
@@ -124,10 +192,20 @@ for k = 1:numSteps
     Tbase = trvec2tform([baseX(k), baseY(k), 0]) * axang2tform([0 0 1 baseYaw(k)]);
     show(robot, config, 'Parent', ax, 'PreservePlot', false, ...
         'Frames', 'off', 'Visuals', 'on', 'FastUpdate', true);
-    robotHandles = findobj(ax, 'Tag', 'RobotVisual');
+
+    robotHandles = findall(ax, '-regexp', 'Tag', '^DO_NOT_EDIT');
     for h = reshape(robotHandles,1,[])
+        if ~ishghandle(h)
+            continue;
+        end
         if get(h, 'Parent') ~= hg
             set(h, 'Parent', hg);
+        end
+        if isprop(h, 'FaceAlpha')
+            set(h, 'FaceAlpha', options.VisualAlpha);
+        end
+        if isprop(h, 'EdgeAlpha')
+            set(h, 'EdgeAlpha', options.VisualAlpha);
         end
     end
     set(hg, 'Matrix', Tbase);
@@ -151,6 +229,12 @@ for k = 1:numSteps
     actualEE(k, :) = TeeWorld(1:3,4)';
     set(actualMarker, 'XData', actualEE(k,1), 'YData', actualEE(k,2), 'ZData', actualEE(k,3));
     set(actualLine, 'XData', actualEE(1:k,1), 'YData', actualEE(1:k,2), 'ZData', actualEE(1:k,3));
+
+    if k < stageBreak
+        set(stageText, 'String', char(stageLabels(1)));
+    else
+        set(stageText, 'String', char(stageLabels(min(2, numel(stageLabels)))));
+    end
 
     drawnow limitrate;
     if ~isempty(videoWriter)

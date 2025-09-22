@@ -26,7 +26,28 @@ figBase = figure('Name', 'Chassis States vs Time', 'Color', 'w');
 T = tiledlayout(figBase, 3, 2, 'TileSpacing', 'compact');
 nexttile; plot(timeVec, data.base.x, 'LineWidth', 1.2); grid on; ylabel('x (m)');
 nexttile; plot(timeVec, data.base.y, 'LineWidth', 1.2); grid on; ylabel('y (m)');
-nexttile; plot(timeVec, rad2deg(wrapToPi(data.base.yaw)), 'LineWidth', 1.2); grid on; ylabel('\psi (deg)');
+nexttile;
+actYawDeg = rad2deg(wrapToPi(data.base.yaw));
+plot(timeVec, actYawDeg, 'LineWidth', 1.2, 'DisplayName', '\psi_{act}');
+hold on;
+legendEntries = {'\psi_{act}'};
+if isfield(data.base, 'yaw_ref')
+    refYawDeg = rad2deg(wrapToPi(data.base.yaw_ref));
+    plot(timeVec, refYawDeg, '--', 'LineWidth', 1.0, 'DisplayName', '\psi_{ref}');
+    legendEntries{end+1} = '\psi_{ref}'; %#ok<AGROW>
+end
+if isfield(data.base, 'yaw_err')
+    yyaxis right;
+    plot(timeVec, rad2deg(data.base.yaw_err), ':', 'LineWidth', 1.0, 'DisplayName', '\Delta\psi');
+    ylabel('\Delta\psi (deg)');
+    legendEntries{end+1} = '\Delta\psi'; %#ok<AGROW>
+    yyaxis left;
+end
+grid on; ylabel('\psi (deg)');
+if numel(legendEntries) > 1
+    legend(legendEntries, 'Location', 'best');
+end
+hold off;
 nexttile; plot(timeVec, data.base.v_long, 'LineWidth', 1.2); grid on; ylabel('v_{long} (m/s)');
 nexttile; plot(timeVec, data.base.v_lat, 'LineWidth', 1.2); grid on; ylabel('v_{lat} (m/s)');
 nexttile; plot(timeVec, data.base.omega, 'LineWidth', 1.2); grid on; ylabel('\omega (rad/s)'); xlabel(T, 'Time (s)');

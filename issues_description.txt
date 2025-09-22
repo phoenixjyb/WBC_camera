@@ -1,0 +1,28 @@
+-------
+
+I believe there is a fundamental issue in this project regarding how to position the robot arm on the chassis to match the initial desired trajectory.
+
+If we carefully review the chassis trajectory, we notice that at the initial stage, the chassis turns around by approximately 180 degrees, with its forward motion pointing along the negative x-axis.
+
+Then, as the chassis travels towards the negative x direction (with the wheels still rolling 'forward' and the arm positioned at the front), it is clear that the desired end-effector (EE) waypoints are actually trailing behind the chassis.
+
+The actual EE point appears to be tracking the desired EE, but it also lags behind the actual arm meshes shown in the animation. In other words, the EE point is not properly aligned with the arm's end effector.
+
+When the desired EE waypoints move towards the positive x-axis, the chassis spins around the z-axis (yaw motion) to turn and move in the positive x direction (with the wheels still rolling forward).
+
+During this part of the motion, there is good alignment between the end of the actual arm meshes and the actual EE points, and the EE points follow the desired EE waypoints.
+
+What could be the possible reason for this discrepancy?
+
+I think two things need to be addressed:
+
+1. Identify the root cause of the misalignment when moving towards the negative x direction, where the actual arm meshes do not follow the actual EE points.
+
+2. Develop a more robust initialization stage. Regardless of the chassis's initial location, with the arm in its default position and given the first desired waypoint, we need a 'ramp-up' stage to ensure the chassis and arm can move to the correct location and orientation before starting the tracking process.
+
+Additionally, the chassis should be allowed to move backwards if needed; it does not always have to move in the forward direction.
+
+-------
+
+
+
