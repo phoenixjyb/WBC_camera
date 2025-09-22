@@ -133,10 +133,46 @@ end
 
 [thetaRefNominal, ~, ~] = compute_base_heading(baseWaypointsNominal);
 
-[baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, rampInfo] = ...
+[baseWaypointsAug, thetaRefAug, rawBaseWaypointsAug, refPositionsAug, refRPYAug, refTimesAug, rampInfo] = ...
     prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, homeEEPosition, homeEERPY);
 
-[thetaRefNominal, ~, ~] = compute_base_heading(baseWaypointsNominal);
+[thetaRefAug, ~, ~] = compute_base_heading(baseWaypointsAug);
+
+rampSamples = rampInfo.steps;
+armRampSamples = rampInfo.armSteps;
+baseRampSamples = rampInfo.baseSteps;
+if rampSamples > 0
+    rampIdx = 1:rampSamples;
+else
+    rampIdx = [];
+end
+trackIdx = (rampSamples + 1):size(baseWaypointsAug,1);
+if isempty(trackIdx)
+    error('prepend_ramp_segment:NoTrackingData', 'Ramp generation consumed all samples; no tracking segment remains.');
+end
+
+baseWaypointsRamp = baseWaypointsAug(rampIdx, :);
+thetaRampNominal = thetaRefAug(rampIdx);
+rawBaseWaypointsRamp = rawBaseWaypointsAug(rampIdx, :);
+refPositionsRamp = refPositionsAug(rampIdx, :);
+refRPYRamp = refRPYAug(rampIdx, :);
+refTimesRamp = refTimesAug(rampIdx);
+
+baseWaypointsNominal = baseWaypointsAug(trackIdx, :);
+thetaRefNominal = thetaRefAug(trackIdx);
+rawBaseWaypoints = rawBaseWaypointsAug(trackIdx, :);
+refPositionsWorld = refPositionsAug(trackIdx, :);
+refRPYWorld = refRPYAug(trackIdx, :);
+refTimes = refTimesAug(trackIdx);
+
+baseWaypointsNominalFull = [baseWaypointsRamp; baseWaypointsNominal];
+rawBaseWaypointsFull = [rawBaseWaypointsRamp; rawBaseWaypoints];
+[thetaRefNominalFull, ~, ~] = compute_base_heading(baseWaypointsNominalFull);
+
+if ~isempty(refTimes)
+    refTimes = refTimes - refTimes(1);
+end
+refTimes = refTimes(:);
 
 poseTformsNominal = build_base_to_ee_targets(baseWaypointsNominal, thetaRefNominal, refPositionsWorld, refRPYWorld);
 
@@ -146,6 +182,10 @@ if any(~foundJoints)
     error('One or more arm joints missing from imported robot model.');
 end
 armTrajectoryNominal = qMatrixNominal(:, armIdx);
+homeVec = zeros(1, numel(armIdx));
+for j = 1:numel(armIdx)
+    homeVec(j) = homeConfig(armIdx(j)).JointPosition;
+end
 
 baseWaypointsRef = baseWaypointsNominal;
 baseRefineInfo = struct('applied', false, 'reason', "disabled", 'maxShift', 0, 'meanShift', 0);
@@ -160,18 +200,18 @@ if any(~foundJoints)
 end
 armTrajectoryRef = qMatrixRefined(:, armIdx);
 
-%% Retiming with joint limits
+%% Retiming with joint limits (tracking segment only)
 armLimitCfg = arm_joint_limits();
 armVelLimits = armLimitCfg.velocity;
 armAccLimits = armLimitCfg.acceleration;
-[armTimes, armTrajectoryTimed, armVelTimed, retimeInfo] = helpers.retime_joint_trajectory(armTrajectoryRef, ...
+[armTimesTrack, armTrajectoryTimedTrack, armVelTimedTrack, retimeInfo] = helpers.retime_joint_trajectory(armTrajectoryRef, ...
     MaxVelocity=armVelLimits, MaxAcceleration=armAccLimits, ...
     TimeStep=0.05, MinSegmentTime=0.2);
-armTimes = armTimes(:);
-armTrajectory = armTrajectoryTimed;
-armTrajectoryInitial = armTrajectory;
+armTimesTrack = armTimesTrack(:);
+armTrajectoryTrack = armTrajectoryTimedTrack;
+armTrajectoryInitial = armTrajectoryTrack;
 
-%% Synchronize chassis motion with retimed trajectory
+%% Synchronize chassis motion with retimed tracking trajectory
 baseLimits = struct('v_max', 0.6, 'omega_max', 1.0, 'lat_acc_max', 0.6);
 maxCurvature = estimate_max_curvature(segmentDist, thetaRef);
 if maxCurvature < 1e-6
@@ -182,38 +222,34 @@ else
     baseSpeedLimit = max(baseSpeedLimit, 0.05);
 end
 
-[baseX, baseY, theta, vBase, omegaBase, scaleFactor, armTimes, armVelTimed, retimeInfo, syncDiag] = ...
+[baseXTrack, baseYTrack, thetaTrack, vBaseTrack, omegaBaseTrack, scaleFactor, armTimesTrack, armVelTimedTrack, retimeInfo, syncDiag] = ...
     synchronize_base_trajectory(baseWaypointsRef, thetaRef, arcLen, refTimes, ...
-                                armTimes, armVelTimed, retimeInfo, baseLimits, baseSpeedLimit);
-poseHistory = [baseX, baseY, theta];
-cmdHistory = [vBase(:), omegaBase(:)];
-tVec = armTimes;
-thetaRefSync = syncDiag.thetaRefTimeline;
-thetaDeviation = wrapToPi(theta - thetaRefSync);
-trackingStartIdx = max(1, min(rampInfo.steps + 1, numel(tVec)));
+                                armTimesTrack, armVelTimedTrack, retimeInfo, baseLimits, baseSpeedLimit);
+poseHistoryTrack = [baseXTrack, baseYTrack, thetaTrack];
+thetaRefSyncTrack = syncDiag.thetaRefTimeline;
 
-% Interpolate desired end-effector positions to synchronized timeline
-if armTimes(end) > armTimes(1)
-    timeParam = (armTimes - armTimes(1)) / (armTimes(end) - armTimes(1));
+% Interpolate desired end-effector positions to synchronized tracking timeline
+if numel(armTimesTrack) > 1
+    timeParamTrack = (armTimesTrack - armTimesTrack(1)) / (armTimesTrack(end) - armTimesTrack(1));
 else
-    timeParam = zeros(size(armTimes));
+    timeParamTrack = zeros(size(armTimesTrack));
 end
-if refTimes(end) > refTimes(1)
+if numel(refTimes) > 1
     timeParamRef = (refTimes - refTimes(1)) / (refTimes(end) - refTimes(1));
 else
     timeParamRef = zeros(size(refTimes));
 end
 
-desiredEEInterp = interp1(timeParamRef, refPositionsWorld, timeParam, 'pchip', 'extrap');
-desiredRPYInterp = zeros(numel(armTimes), 3);
+desiredEETrack = interp1(timeParamRef, refPositionsWorld, timeParamTrack, 'pchip', 'extrap');
+desiredRPYTrack = zeros(numel(armTimesTrack), 3);
 for idx = 1:3
-    desiredRPYInterp(:, idx) = wrapToPi(interp1(timeParamRef, unwrap(refRPYWorld(:, idx)), timeParam, 'pchip', 'extrap'));
+    desiredRPYTrack(:, idx) = wrapToPi(interp1(timeParamRef, unwrap(refRPYWorld(:, idx)), timeParamTrack, 'pchip', 'extrap'));
 end
 
-poseTformsFinal = cell(1, numel(armTimes));
-for k = 1:numel(armTimes)
-    Tbase = trvec2tform([baseX(k), baseY(k), 0]) * axang2tform([0 0 1 theta(k)]);
-    Tworld = trvec2tform(desiredEEInterp(k,:)) * eul2tform(desiredRPYInterp(k,:), 'XYZ');
+poseTformsFinal = cell(1, numel(armTimesTrack));
+for k = 1:numel(armTimesTrack)
+    Tbase = trvec2tform([baseXTrack(k), baseYTrack(k), 0]) * axang2tform([0 0 1 thetaTrack(k)]);
+    Tworld = trvec2tform(desiredEETrack(k,:)) * eul2tform(desiredRPYTrack(k,:), 'XYZ');
     poseTformsFinal{k} = Tbase \ Tworld;
 end
 
@@ -230,9 +266,9 @@ end
 if any(~foundJointsFinal)
     error('One or more arm joints missing from final IK solve.');
 end
-armTrajectory = qMatrixFinal(:, armIdxFinal);
+armTrajectoryTrack = qMatrixFinal(:, armIdxFinal);
 
-ikError = evaluate_ik_pose_error(robot, armJointNames, armTrajectory, poseTformsFinal, eeName);
+ikError = evaluate_ik_pose_error(robot, armJointNames, armTrajectoryTrack, poseTformsFinal, eeName);
 ikPoseTol = struct('position', 0.02, 'orientation', deg2rad(5));
 badPos = ikError.translation > ikPoseTol.position;
 badOri = ikError.orientation > ikPoseTol.orientation;
@@ -270,23 +306,122 @@ if any(~ikConvergedFlags)
         '%d IK samples did not report successful convergence.', nnz(~ikConvergedFlags));
 end
 
-% Compute actual end-effector metrics in world frame
+%% Assemble staged trajectory and compute metrics
+if isempty(armTrajectoryTrack)
+    readyPose = homeVec;
+else
+    readyPose = armTrajectoryTrack(1,:);
+end
+
+if armRampSamples > 0
+    tauArm = linspace(0, 1, armRampSamples)';
+    armWarmupTraj = (1 - tauArm) .* homeVec + tauArm .* readyPose;
+else
+    armWarmupTraj = zeros(0, numel(homeVec));
+end
+
+if baseRampSamples > 0
+    armBaseHoldTraj = repmat(readyPose, baseRampSamples, 1);
+else
+    armBaseHoldTraj = zeros(0, numel(homeVec));
+end
+
+armTrajectory = [armWarmupTraj; armBaseHoldTraj; armTrajectoryTrack];
+rampSamplesTotal = armRampSamples + baseRampSamples;
+
+if isempty(armVelTimedTrack)
+    armVelTimedTrack = zeros(size(armTrajectoryTrack));
+end
+armVelTimed = [zeros(rampSamplesTotal, size(armTrajectoryTrack,2)); armVelTimedTrack];
+
+sampleDt = trajOpts.sample_dt;
+if ~isempty(armTimesTrack)
+    armTimesTrack = armTimesTrack - armTimesTrack(1);
+end
+tArmWarmup = ((0:armRampSamples-1)') * sampleDt;
+tBaseWarmup = ((armRampSamples:(armRampSamples + baseRampSamples - 1))') * sampleDt;
+tTracking = armTimesTrack + rampSamplesTotal * sampleDt;
+tVec = [tArmWarmup; tBaseWarmup; tTracking];
+armTimes = tVec;
+
+poseHistoryArm = zeros(armRampSamples, 3);
+if armRampSamples > 0
+    poseHistoryArm(:,1:2) = baseWaypointsRamp(1:armRampSamples, :);
+    poseHistoryArm(:,3) = thetaRampNominal(1:armRampSamples);
+end
+poseHistoryBase = zeros(baseRampSamples, 3);
+if baseRampSamples > 0
+    idxStart = armRampSamples + 1;
+    idxEnd = idxStart + baseRampSamples - 1;
+    poseHistoryBase(:,1:2) = baseWaypointsRamp(idxStart:idxEnd, :);
+    poseHistoryBase(:,3) = thetaRampNominal(idxStart:idxEnd);
+end
+poseHistory = [poseHistoryArm; poseHistoryBase; poseHistoryTrack];
+baseX = poseHistory(:,1);
+baseY = poseHistory(:,2);
+theta = poseHistory(:,3);
+
+thetaRefRamp = thetaRampNominal;
+thetaRefSync = [thetaRefRamp; thetaRefSyncTrack];
+thetaRefSync = thetaRefSync(:);
+thetaDeviation = wrapToPi(theta - thetaRefSync);
+
+if rampSamplesTotal > 0
+    desiredEERamp = repmat(refPositionsWorld(1,:), rampSamplesTotal, 1);
+    desiredRPYRamp = repmat(refRPYWorld(1,:), rampSamplesTotal, 1);
+else
+    desiredEERamp = zeros(0, size(refPositionsWorld,2));
+    desiredRPYRamp = zeros(0, 3);
+end
+desiredEEInterp = [desiredEERamp; desiredEETrack];
+desiredRPYInterp = [desiredRPYRamp; desiredRPYTrack];
+
+if isempty(refTimes)
+    refTimesGlobal = ((0:rampSamplesTotal-1)') * sampleDt;
+else
+    refTimesGlobal = [((0:rampSamplesTotal-1)') * sampleDt; refTimes + rampSamplesTotal * sampleDt];
+end
+refTimesGlobal = refTimesGlobal(:);
+
+trackingStartIdx = max(1, min(rampSamplesTotal + 1, numel(tVec)));
+
+baseWaypointsRefFull = [baseWaypointsRamp; baseWaypointsRef];
+[thetaRefFull, ~, ~] = compute_base_heading(baseWaypointsRefFull);
+
+if isfield(syncDiag, 'directionSign')
+    directionSignFull = [ones(rampSamplesTotal,1); syncDiag.directionSign];
+else
+    directionSignFull = [];
+end
+
 eeMetrics = helpers.compute_ee_metrics(robot, armJointNames, armTrajectory, poseHistory, tVec, eeName);
 
-% Base velocities in longitudinal/lateral components
 vx_world = gradient(baseX, tVec);
 vy_world = gradient(baseY, tVec);
+omegaBase = gradient(unwrap(theta), tVec);
+if numel(vx_world) > 1
+    vx_world([1 end]) = vx_world([2 end-1]);
+    vy_world([1 end]) = vy_world([2 end-1]);
+    omegaBase([1 end]) = omegaBase([2 end-1]);
+end
+
+vBaseWorldMag = sqrt(vx_world.^2 + vy_world.^2);
 v_long = vx_world .* cos(theta) + vy_world .* sin(theta);
 v_lat  = -vx_world .* sin(theta) + vy_world .* cos(theta);
+cmdHistory = [v_long(:), omegaBase(:)];
 
-% End-effector error metrics
 eeErrorVec = desiredEEInterp - eeMetrics.positions;
 eeErrorNorm = sqrt(sum(eeErrorVec.^2, 2));
 trackingIdx = trackingStartIdx:numel(eeErrorNorm);
 eeErrorVecTracking = eeErrorVec(trackingIdx, :);
 eeErrorNormTracking = eeErrorNorm(trackingIdx);
-maxEEErrorTracking = max(eeErrorNormTracking);
-meanEEErrorTracking = mean(eeErrorNormTracking);
+if isempty(eeErrorNormTracking)
+    maxEEErrorTracking = 0;
+    meanEEErrorTracking = 0;
+else
+    maxEEErrorTracking = max(eeErrorNormTracking);
+    meanEEErrorTracking = mean(eeErrorNormTracking);
+end
 maxEEErrorTotal = max(eeErrorNorm);
 meanEEErrorTotal = mean(eeErrorNorm);
 
@@ -295,15 +430,14 @@ if maxEEErrorTracking > 0.05
         'Max EE position error %.3f m (tracking phase) exceeds tolerance of 0.05 m.', maxEEErrorTracking);
 end
 
-% End-effector kinematic magnitudes
 eeSpeed = eeMetrics.speed;
 eeAccelMag = eeMetrics.accel_mag;
 eeJerkMag = eeMetrics.jerk_mag;
 
 %% Visualize planar motion
 figPlanar = figure('Name', 'Planar Base Path'); hold on; grid on; axis equal;
-plot(rawBaseWaypoints(:,1), rawBaseWaypoints(:,2), 'k--o', 'DisplayName', 'Raw waypoints');
-plot(baseWaypointsRef(:,1), baseWaypointsRef(:,2), 'c-.', 'LineWidth', 1.0, 'DisplayName', 'Refined base (IK)');
+plot(rawBaseWaypointsFull(:,1), rawBaseWaypointsFull(:,2), 'k--o', 'DisplayName', 'Raw waypoints');
+plot(baseWaypointsRefFull(:,1), baseWaypointsRefFull(:,2), 'c-.', 'LineWidth', 1.0, 'DisplayName', 'Refined base (IK)');
 plot(baseX, baseY, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Synchronized path');
 scatter(baseX(1), baseY(1), 70, 'filled', 'MarkerFaceColor', [0.1 0.7 0.2], 'DisplayName', 'Start');
 scatter(baseX(end), baseY(end), 70, 'filled', 'MarkerFaceColor', [0.8 0.2 0.2], 'DisplayName', 'End');
@@ -316,7 +450,7 @@ title('Chassis trajectory synchronized with arm timeline');
 fprintf('Generated %d arm samples via IK.\n', size(armTrajectory,1));
 fprintf('Timeline duration: %.2f s across %d synchronized samples.\n', tVec(end), numel(tVec));
 fprintf('Base timeline scale factor: %.2f (>=1 implies slowing due to limits).\n', scaleFactor);
-fprintf('Max base speed: %.3f m/s, Max base yaw rate: %.3f rad/s.\n', max(abs(vBase)), max(abs(omegaBase)));
+fprintf('Max base speed: %.3f m/s, Max base yaw rate: %.3f rad/s.\n', max(vBaseWorldMag), max(abs(omegaBase)));
 fprintf('Max base yaw deviation from reference: %.2f deg.\n', rad2deg(max(abs(thetaDeviation))));
 fprintf('Ramp-up samples: %d (arm %d, base %d). Tracking begins at index %d.\n', rampInfo.steps, rampInfo.armSteps, rampInfo.baseSteps, trackingStartIdx);
 fprintf('Max EE tracking error: %.3f m (mean %.3f m).\n', maxEEErrorTracking, meanEEErrorTracking);
@@ -331,22 +465,24 @@ results.armLimits = armLimitCfg;
 results.basePose = poseHistory;
 results.baseTimes = tVec;
 results.baseCmd = cmdHistory;
-results.baseWaypoints = baseWaypointsRef;
-results.baseWaypointsRaw = rawBaseWaypoints;
-results.baseWaypointsNominal = baseWaypointsNominal;
-results.baseHeadingNominal = thetaRefNominal;
-results.baseHeadingRefined = thetaRef;
+results.baseWaypoints = baseWaypointsRefFull;
+results.baseWaypointsRaw = rawBaseWaypointsFull;
+results.baseWaypointsNominal = baseWaypointsNominalFull;
+results.baseHeadingNominal = thetaRefNominalFull;
+results.baseHeadingRefined = thetaRefFull;
 results.baseYawReferenceTimeline = thetaRefSync;
 results.baseYawError = thetaDeviation;
 results.baseSyncScale = scaleFactor;
 results.baseSyncScaleHistory = syncDiag.scaleHistory;
 results.baseRefinement = baseRefineInfo;
 results.baseInitialization = rampInfo;
-if isfield(syncDiag, 'directionSign')
-    results.baseDirectionSign = syncDiag.directionSign;
+if ~isempty(directionSignFull)
+    results.baseDirectionSign = directionSignFull;
 end
 results.baseVelocityLong = v_long;
 results.baseVelocityLat = v_lat;
+results.baseVelocityYaw = omegaBase;
+results.baseVelocityMag = vBaseWorldMag;
 results.eeDesired = desiredEEInterp;
 results.eeDesiredRPY = desiredRPYInterp;
 results.eeActual = eeMetrics;
@@ -361,7 +497,7 @@ results.meanTrackingErrorTotal = meanEEErrorTotal;
 results.eeSpeed = eeSpeed;
 results.eeAccelMag = eeAccelMag;
 results.eeJerkMag = eeJerkMag;
-results.referenceTimes = refTimes;
+results.referenceTimes = refTimesGlobal;
 results.retime = retimeInfo;
 results.trackingStartIndex = trackingStartIdx;
 results.ikPoseError = ikError;
@@ -442,7 +578,11 @@ function [baseWaypointsOut, thetaRefOut, rawBaseWaypointsOut, refPositionsOut, r
     prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, homeEEPos, homeEERPY)
 
 homePose = [0, 0, 0];
-targetPose = [baseWaypointsIn(1,:), thetaRefIn(1)];
+eeHomeXY = homeEEPos(1:2);
+eeTargetXY = refPositionsIn(1,1:2);
+deltaXY = eeTargetXY - eeHomeXY;
+targetXY = homePose(1:2) + deltaXY;
+targetPose = [targetXY, thetaRefIn(1)];
 
 posError = norm(targetPose(1:2) - homePose(1:2));
 yawError = abs(wrapToPi(targetPose(3) - homePose(3)));
@@ -463,13 +603,37 @@ end
 
 armPhaseSteps = max(ceil(2.0 / max(sampleDt, 1e-3)), 20);
 basePhaseDuration = max(1.5, max(posError / 0.25, yawError / deg2rad(45)));
-basePhaseSteps = max(ceil(basePhaseDuration / max(sampleDt, 1e-3)), 20);
+basePhaseStepsMin = max(ceil(basePhaseDuration / max(sampleDt, 1e-3)), 20);
 
 rampInfo.enabled = true;
 rampInfo.armSteps = armPhaseSteps;
+
+plannerOpts = struct('StepSize', 0.05, 'Wheelbase', 0.5, 'MaxSteer', deg2rad(30), ...
+    'GoalPosTol', 0.01, 'GoalYawTol', deg2rad(5), 'MaxIterations', 5000);
+path = helpers.hybrid_astar_plan(homePose, targetPose, plannerOpts);
+if isempty(path)
+    path = [homePose; targetPose];
+end
+
+sPath = linspace(0, 1, size(path,1));
+targetSamples = max(size(path,1) - 1, basePhaseStepsMin);
+if targetSamples <= 0
+    basePhaseSteps = 0;
+    baseInterp = zeros(0,2);
+    thetaInterpRes = zeros(0,1);
+else
+    sRes = linspace(0, 1, targetSamples + 1);
+    baseInterp = interp1(sPath, path(:,1:2), sRes(2:end));
+    thetaInterpRes = interp1(sPath, unwrap(path(:,3)), sRes(2:end));
+    basePhaseSteps = size(baseInterp,1);
+end
+
 rampInfo.baseSteps = basePhaseSteps;
 rampInfo.steps = armPhaseSteps + basePhaseSteps;
 rampInfo.duration = rampInfo.steps * sampleDt;
+rampInfo.armDuration = rampInfo.armSteps * sampleDt;
+rampInfo.baseDuration = rampInfo.baseSteps * sampleDt;
+rampInfo.sampleDt = sampleDt;
 
 baseRamp = zeros(rampInfo.steps, 2);
 thetaRamp = zeros(rampInfo.steps, 1);
@@ -478,11 +642,8 @@ if armPhaseSteps > 0
     thetaRamp(1:armPhaseSteps) = homePose(3);
 end
 if basePhaseSteps > 0
-    interpX = linspace(homePose(1), targetPose(1), basePhaseSteps + 1)';
-    interpY = linspace(homePose(2), targetPose(2), basePhaseSteps + 1)';
-    interpTheta = linspace(homePose(3), targetPose(3), basePhaseSteps + 1)';
-    baseRamp(armPhaseSteps+1:end, :) = [interpX(2:end), interpY(2:end)];
-    thetaRamp(armPhaseSteps+1:end) = unwrap(interpTheta(2:end));
+    baseRamp(armPhaseSteps+1:end, :) = baseInterp;
+    thetaRamp(armPhaseSteps+1:end) = thetaInterpRes(:);
 end
 
 refTimesRamp = refTimesIn(1) + (-rampInfo.steps:-1)' * sampleDt;
@@ -499,7 +660,7 @@ refPositionsOut = [refPositionsRamp; refPositionsIn];
 refRPYOut = [refRPYRamp; refRPYIn];
 refTimesOut = [refTimesRamp; refTimesIn];
 
-rampInfo.timeAdded = refTimesOut(1);
+rampInfo.timeAdded = rampInfo.duration;
 
     function quat = slerp_quat_local(q0, q1, tau)
         q0 = q0(:)'/max(norm(q0), 1e-12);
