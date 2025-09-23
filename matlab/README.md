@@ -10,6 +10,7 @@ This folder outlines a MATLAB-based control workflow that mirrors the ROS 2 whol
 - `arm_joint_limits.m` — central definition of adjustable arm joint velocity/acceleration limits.
 - `+helpers/plot_planar_path.m` — visualization helper for planar trajectories and tracker pose.
 - `+helpers/retime_joint_trajectory.m` — time-parameterizes arm waypoints with velocity/acceleration limits.
+- `+helpers/load_collision_mesh.m` — loads chassis/column STL geometry into a `collisionMesh` for GIK collision avoidance.
 
 ## Usage Workflow
 1. Export or record a MoveIt `JointTrajectory` (JSON or MATLAB struct) containing the world joint and arm joints.

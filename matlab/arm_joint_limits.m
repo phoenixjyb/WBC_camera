@@ -6,7 +6,7 @@ function limits = arm_joint_limits()
 %
 %   Update these values as your hardware specifications evolve.
 
-limits.velocity = [1.6, 1.6, 4.0, 4.0, 4.0, 4.0];
+limits.velocity = [1.6, 1.6, 1.6, 4.0, 4.0, 4.0];
 % Conservative accelerations derived from legacy specs (120–240 deg/s^2).
 limits.acceleration = [2.0944, 2.0944, 2.6179, 3.1416, 3.1416, 4.1888];
 end

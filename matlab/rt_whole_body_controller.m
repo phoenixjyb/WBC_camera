@@ -76,6 +76,7 @@ gikOptions = struct('PositionTolerance', 0.005, ...
                     'UseWarmStart', true, ...
                     'DistanceConstraints', {{}}, ...
                     'CartesianBounds', {{}}, ...
+                    'CollisionAvoidance', {{}}, ...
                     'JointBounds', struct([]));
 if exist('gik_options', 'var') && ~isempty(gik_options) && isstruct(gik_options)
     optFields = fieldnames(gik_options);
@@ -111,6 +112,10 @@ TeeHome = getTransform(robot, homeConfig, eeName);
 homeEEPosition = TeeHome(1:3,4)';
 homeEERPY = rotm2eul(TeeHome(1:3,1:3), 'XYZ');
 
+homeBasePose = compute_home_base_pose();
+rampBaseSpeedMax = 0.2;
+trackingBaseSpeedMax = 0.6;
+
 if useGeneralizedIK
     if isempty(gikOptions.DistanceConstraints)
         defaultDist = struct('EndEffector', eeName, ...
@@ -126,6 +131,26 @@ if useGeneralizedIK
                              'TargetTransform', eye(4), ...
                              'Weights', [1 1 1]);
         gikOptions.CartesianBounds = {defaultCart};
+    end
+
+    if isempty(gikOptions.CollisionAvoidance)
+        chassisMeshPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'meshes', 'cr_no_V.stl');
+        if exist(chassisMeshPath, 'file') == 2
+            try
+                chassisMesh = helpers.load_collision_mesh(chassisMeshPath);
+                collisionStruct = struct('Environment', {{chassisMesh}}, ...
+                                         'SelfCollisions', false, ...
+                                         'Weights', 1.0, ...
+                                         'NumSamples', 6);
+                gikOptions.CollisionAvoidance = {collisionStruct};
+            catch ME
+                warning('rt_whole_body_controller:CollisionMeshLoad', ...
+                    'Failed to load collision mesh %s (%s). Continuing without collision avoidance.', chassisMeshPath, ME.message);
+            end
+        else
+            warning('rt_whole_body_controller:CollisionMeshMissing', ...
+                'Collision mesh %s not found. Continuing without collision avoidance.', chassisMeshPath);
+        end
     end
 end
 
@@ -143,6 +168,11 @@ if size(traj.eePoses,2) >= 6
     refRPYWorld = traj.eePoses(:,4:6);
 else
     refRPYWorld = zeros(size(refPositionsWorld));
+end
+
+yawDesiredAll = [];
+if size(refRPYWorld,2) >= 3
+    yawDesiredAll = wrapToPi(refRPYWorld(:,3));
 end
 numRefSamples = size(refPositionsWorld,1);
 
@@ -169,10 +199,15 @@ if size(baseWaypointsNominal,1) > 4
     baseWaypointsNominal(end,:) = rawBaseWaypoints(end,:);
 end
 
-[thetaRefNominal, ~, ~] = compute_base_heading(baseWaypointsNominal);
+[thetaGeomNominal, ~, ~] = compute_base_heading(baseWaypointsNominal);
+if ~isempty(yawDesiredAll)
+    thetaRefNominal = yawDesiredAll;
+else
+    thetaRefNominal = thetaGeomNominal;
+end
 
 [baseWaypointsAug, thetaRefAug, rawBaseWaypointsAug, refPositionsAug, refRPYAug, refTimesAug, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, homeEEPosition, homeEERPY);
+    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, robot, armJointNames, homeEEPosition, homeEERPY, homeBasePose, rampBaseSpeedMax, thetaRefNominal(1));
 
 baseWaypointsNominalFull = baseWaypointsAug;
 rawBaseWaypointsFull = rawBaseWaypointsAug;
@@ -218,6 +253,19 @@ if any(~foundJoints)
     error('One or more arm joints missing from imported robot model.');
 end
 armTrajectoryNominal = qMatrixNominal(:, armIdx);
+armRampTrajectoryIK = zeros(0, numel(armIdx));
+ikInfosRamp = {};
+if isfield(rampInfo, 'armJointTrajectory') && ~isempty(rampInfo.armJointTrajectory)
+    armRampTrajectoryIK = rampInfo.armJointTrajectory;
+    armRampSamples = size(armRampTrajectoryIK, 1);
+elseif armRampSamples > 0
+    armRampTrajectoryIK = armTrajectoryNominal(1:armRampSamples, :);
+end
+if armRampSamples > 0 && ~isempty(ikInfosNominal)
+    upper = min(armRampSamples, numel(ikInfosNominal));
+    ikInfosRamp = ikInfosNominal(1:upper);
+end
+
 homeVec = zeros(1, numel(armIdx));
 for j = 1:numel(armIdx)
     homeVec(j) = homeConfig(armIdx(j)).JointPosition;
@@ -226,7 +274,11 @@ end
 baseWaypointsRef = baseWaypointsNominal;
 baseRefineInfo = struct('applied', false, 'reason', "disabled", 'maxShift', 0, 'meanShift', 0);
 
-[thetaRef, arcLen, segmentDist] = compute_base_heading(baseWaypointsRef);
+[thetaGeomRef, arcLen, segmentDist] = compute_base_heading(baseWaypointsRef);
+thetaRef = thetaGeomRef;
+if size(refRPYWorld,2) >= 3
+    thetaRef = wrapToPi(refRPYWorld(:,3));
+end
 poseTformsBase = build_base_to_ee_targets(baseWaypointsRef, thetaRef, refPositionsWorld, refRPYWorld);
 
 if useGeneralizedIK
@@ -262,8 +314,8 @@ armTrajectoryTrack = armTrajectoryTimedTrack;
 armTrajectoryInitial = armTrajectoryTrack;
 
 %% Synchronize chassis motion with retimed tracking trajectory
-baseLimits = struct('v_max', 0.6, 'omega_max', 1.0, 'lat_acc_max', 0.6);
-maxCurvature = estimate_max_curvature(segmentDist, thetaRef);
+baseLimits = struct('v_max', trackingBaseSpeedMax, 'omega_max', 1.0, 'lat_acc_max', 0.6);
+maxCurvature = estimate_max_curvature(segmentDist, thetaGeomRef);
 if maxCurvature < 1e-6
     baseSpeedLimit = baseLimits.v_max;
 else
@@ -370,11 +422,15 @@ else
     readyPose = armTrajectoryTrack(1,:);
 end
 
+armWarmupTraj = zeros(0, numel(homeVec));
 if armRampSamples > 0
-    tauArm = linspace(0, 1, armRampSamples)';
-    armWarmupTraj = (1 - tauArm) .* homeVec + tauArm .* readyPose;
-else
-    armWarmupTraj = zeros(0, numel(homeVec));
+    if size(armRampTrajectoryIK,1) == armRampSamples
+        armWarmupTraj = armRampTrajectoryIK;
+        readyPose = armWarmupTraj(end,:);
+    else
+        tauArm = linspace(0, 1, armRampSamples)';
+        armWarmupTraj = (1 - tauArm) .* homeVec + tauArm .* readyPose;
+    end
 end
 
 if baseRampSamples > 0
@@ -565,8 +621,25 @@ results.trackingStartIndex = trackingStartIdx;
 results.ikPoseError = ikError;
 results.ikJointLimitFlags = ikJointLimitFlags;
 results.ikConverged = ikConvergedFlags;
+stageBoundaries = [armRampSamples, armRampSamples + baseRampSamples, size(armTrajectory,1)];
+stageBoundaries = unique(max(stageBoundaries, 1));
+if stageBoundaries(end) ~= size(armTrajectory,1)
+    stageBoundaries(end+1) = size(armTrajectory,1);
+end
+stageLabels = ["Arm ramp", "Chassis ramp", "Tracking"];
+if numel(stageLabels) > numel(stageBoundaries)
+    stageLabels = stageLabels(1:numel(stageBoundaries));
+elif numel(stageLabels) < numel(stageBoundaries)
+    stageLabels(end+1:numel(stageBoundaries)) = stageLabels(end);
+end
+
+results.stageBoundaries = stageBoundaries;
+results.stageLabels = stageLabels;
 results.ikPoseTolerance = ikPoseTol;
-results.ikInfos = struct('nominal', {ikInfosNominal}, 'refined', {ikInfosRefined}, 'final', {ikInfosFinal});
+results.ikInfos = struct('rampWarmup', {ikInfosRamp}, ...
+                         'nominal', {ikInfosNominal}, ...
+                         'refined', {ikInfosRefined}, ...
+                         'final', {ikInfosFinal});
 if useGeneralizedIK
     results.ikMode = "gik";
     results.gikSettings = struct('PositionTolerance', gikOptions.PositionTolerance, ...
@@ -574,7 +647,8 @@ if useGeneralizedIK
                                  'UseWarmStart', gikOptions.UseWarmStart, ...
                                  'ExtraConstraintCount', numel(gikOptions.ExtraConstraints), ...
                                  'DistanceConstraintCount', numel(gikOptions.DistanceConstraints), ...
-                                 'CartesianBoundsCount', numel(gikOptions.CartesianBounds));
+                                 'CartesianBoundsCount', numel(gikOptions.CartesianBounds), ...
+                                 'CollisionConstraintCount', numel(gikOptions.CollisionAvoidance));
 else
     results.ikMode = "ik";
 end
@@ -601,7 +675,7 @@ if animateRobot
     end
     helpers.animate_whole_body(robot, armJointNames, armTrajectory, armTimes, ...
         poseHistory, tVec, desiredEEInterp, args{:}, ...
-        'StageBreakIndex', trackingStartIdx, 'StageLabels', ["Ramp-up", "Tracking"]);
+        'StageBoundaries', stageBoundaries, 'StageLabels', stageLabels);
 end
 
 resultsFile = fullfile(outputDir, outputBase + "_results.mat");
@@ -648,18 +722,100 @@ end
 end
 
 function [baseWaypointsOut, thetaRefOut, rawBaseWaypointsOut, refPositionsOut, refRPYOut, refTimesOut, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, homeEEPos, homeEERPY)
+    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, robot, armJointNames, homeEEPos, homeEERPY, homeBasePose, rampBaseSpeedMax, desiredYawTarget)
 
-pointD = refPositionsIn(1, :);
-pointC = pointD;
-pointC(1) = pointC(1) - 1.0;
-pointC(2) = pointC(2) - 0.5;
+if nargin < 10 || isempty(robot)
+    error('prepend_ramp_segment requires robot model input.');
+end
+if nargin < 11 || isempty(armJointNames)
+    error('prepend_ramp_segment requires armJointNames.');
+end
+if nargin < 12 || isempty(homeEERPY)
+    homeEERPY = [0 0 0];
+end
+if nargin < 13 || isempty(homeBasePose)
+    homeBasePose = compute_home_base_pose();
+end
+if nargin < 14 || isempty(rampBaseSpeedMax)
+    rampBaseSpeedMax = 0.2;
+end
+if nargin < 15 || isempty(desiredYawTarget)
+    desiredYawTarget = thetaRefIn(1);
+end
 
-pointB = [pointD(1) - 0.3, pointD(2) - 0.3, 0];
-pointA = [pointB(1) + 1.0, pointB(2) + 0.5, 0];
+homePose = homeBasePose(:)';
+if numel(homePose) ~= 3
+    error('Home base pose must be a 1x3 vector [x y yaw].');
+end
 
-homePose = [pointA(1), pointA(2), 0];
-targetPose = [pointB(1), pointB(2), 0];
+
+% Solve IK once for the arm ramp goal (match height/orientation, free XY)
+eeNameLocal = 'left_gripper_link';
+armGoal = compute_arm_ramp_goal(homeEEPos, refPositionsIn(1,:), refRPYIn, homeEERPY);
+armGoal.initialPosition = armGoal.position;
+armGoal.initialRPY = armGoal.rpy;
+desiredZ = armGoal.position(3);
+desiredRPY = armGoal.rpy;
+
+configHome = homeConfiguration(robot);
+vectorNames = {configHome.JointName};
+armIdxLocal = zeros(1, numel(armJointNames));
+for j = 1:numel(armJointNames)
+    idx = find(strcmp(vectorNames, armJointNames{j}), 1);
+    if isempty(idx)
+        error('prepend_ramp_segment:JointMissing', 'Joint %s not present in robot model.', armJointNames{j});
+    end
+    armIdxLocal(j) = idx;
+end
+
+qStart = zeros(1, numel(armIdxLocal));
+for j = 1:numel(armIdxLocal)
+    qStart(j) = configHome(armIdxLocal(j)).JointPosition;
+end
+
+armPhaseSteps = 20;
+armSamplePeriod = sampleDt;
+if armSamplePeriod <= 0
+    armSamplePeriod = 0.1;
+end
+armTotalTime = (max(armPhaseSteps, 1) - 1) * armSamplePeriod;
+timeSamples = linspace(0, armTotalTime, max(armPhaseSteps, 1));
+
+gikSolver = generalizedInverseKinematics('RigidBodyTree', robot, ...
+    'ConstraintInputs', {'cartesian','orientation'});
+cartBound = constraintCartesianBounds(eeNameLocal);
+cartBound.ReferenceBody = robot.BaseName;
+cartBound.Bounds = [-Inf Inf; -Inf Inf; desiredZ desiredZ];
+cartBound.Weights = [0.1 0.1 1];
+orientTarget = constraintOrientationTarget(eeNameLocal);
+orientTarget.ReferenceBody = robot.BaseName;
+orientTarget.TargetOrientation = eul2quat(desiredRPY, 'XYZ');
+
+[seedConfigs, seedLabels, seedJointVectors] = build_arm_ramp_seed_set(configHome, armIdxLocal, qStart, robot, armJointNames);
+[configGoal, qEnd, candidateSolutions, selectedSeedIdx] = solve_arm_ramp_gik(gikSolver, cartBound, orientTarget, seedConfigs, armIdxLocal, qStart);
+
+TeeGoal = getTransform(robot, configGoal, eeNameLocal);
+virtualPos = TeeGoal(1:3,4)';
+firstRPY = rotm2eul(TeeGoal(1:3,1:3), 'XYZ');
+
+armGoal.position = virtualPos;
+armGoal.rpy = firstRPY;
+armGoal.jointSolution = qEnd;
+armGoal.candidateJointSolutions = candidateSolutions;
+armGoal.seedSelection = struct('index', selectedSeedIdx, 'labels', {seedLabels});
+
+if armTotalTime <= 0
+    armRampJointTraj = repmat(qStart, max(armPhaseSteps, 1), 1);
+    armRampJointVel = zeros(size(armRampJointTraj));
+    armRampJointAcc = zeros(size(armRampJointTraj));
+else
+    [qTraj, qdTraj, qddTraj] = quinticpolytraj([qStart; qEnd]', [0 armTotalTime], timeSamples);
+    armRampJointTraj = qTraj';
+    armRampJointVel = qdTraj';
+    armRampJointAcc = qddTraj';
+end
+
+targetPose = compute_chassis_ramp_goal(homePose, baseWaypointsIn, thetaRefIn, desiredYawTarget);
 
 posError = norm(targetPose(1:2) - homePose(1:2));
 yawError = abs(wrapToPi(targetPose(3) - homePose(3)));
@@ -667,8 +823,12 @@ yawError = abs(wrapToPi(targetPose(3) - homePose(3)));
 rampInfo = struct('enabled', false, 'duration', 0, 'steps', 0, ...
     'startPose', homePose, 'targetPose', targetPose, 'timeAdded', 0, ...
     'armSteps', 0, 'baseSteps', 0, ...
-    'eeStart', pointC, 'eeGoal', pointD, ...
-    'baseStart', pointA, 'baseGoal', pointB);
+    'eeStart', homeEEPos, 'eeGoal', virtualPos, ...
+    'baseStart', homePose(1:2), 'baseGoal', targetPose(1:2), ...
+    'virtualEEPose', armGoal, 'baseSpeedLimit', rampBaseSpeedMax, ...
+    'armGoalCandidates', candidateSolutions, 'armSeedLabels', {seedLabels}, ...
+    'armSelectedSeed', selectedSeedIdx, 'armSeedVectors', seedJointVectors, ...
+    'armJointVelocity', [], 'armJointAcceleration', [], 'armSamplePeriod', armSamplePeriod);
 
 if posError < 1e-4 && yawError < deg2rad(0.5)
     baseWaypointsOut = baseWaypointsIn;
@@ -680,12 +840,16 @@ if posError < 1e-4 && yawError < deg2rad(0.5)
     return;
 end
 
-armPhaseSteps = max(ceil(2.0 / max(sampleDt, 1e-3)), 20);
 basePhaseDuration = max(1.5, max(posError / 0.25, yawError / deg2rad(45)));
 basePhaseStepsMin = max(ceil(basePhaseDuration / max(sampleDt, 1e-3)), 20);
 
 rampInfo.enabled = true;
 rampInfo.armSteps = armPhaseSteps;
+rampInfo.armJointTrajectory = armRampJointTraj;
+rampInfo.armJointVelocity = armRampJointVel;
+rampInfo.armJointAcceleration = armRampJointAcc;
+rampInfo.armTimeVector = timeSamples(:);
+rampInfo.armGoalConfig = qEnd;
 
 plannerOpts = struct('StepSize', 0.05, 'Wheelbase', 0.5, 'MaxSteer', deg2rad(30), ...
     'GoalPosTol', 0.01, 'GoalYawTol', deg2rad(5), 'MaxIterations', 5000);
@@ -693,26 +857,47 @@ path = helpers.hybrid_astar_plan(homePose, targetPose, plannerOpts);
 if isempty(path)
     path = [homePose; targetPose];
 end
+path(1,:) = homePose;
+path(end,:) = targetPose;
 
-sPath = linspace(0, 1, size(path,1));
-targetSamples = max(size(path,1) - 1, basePhaseStepsMin);
-if targetSamples <= 0
-    basePhaseSteps = 0;
-    baseInterp = zeros(0,2);
+if size(path,1) == 1
+    basePhaseSteps = max(basePhaseStepsMin, 0);
+    baseInterp = zeros(basePhaseSteps, 2);
+    thetaInterpRes = zeros(basePhaseSteps, 1);
+    pathLength = 0;
+else
+    diffs = diff(path(:,1:2));
+    segmentDist = sqrt(sum(diffs.^2, 2));
+    arc = [0; cumsum(segmentDist)];
+    pathLength = arc(end);
+    if pathLength < 1e-9
+        basePhaseSteps = max(basePhaseStepsMin, 0);
+        baseInterp = zeros(basePhaseSteps, 2);
+        thetaInterpRes = zeros(basePhaseSteps, 1);
+    else
+        maxStep = max(rampBaseSpeedMax * sampleDt, 1e-3);
+        minSamplesSpeed = max(1, ceil(pathLength / maxStep));
+        basePhaseSteps = max(basePhaseStepsMin, minSamplesSpeed);
+        sPath = arc / pathLength;
+        sRes = linspace(0, 1, basePhaseSteps + 1)';
+        baseInterp = interp1(sPath, path(:,1:2), sRes(2:end), 'linear', 'extrap');
+        yawPath = unwrap(path(:,3));
+        thetaInterpRes = interp1(sPath, yawPath, sRes(2:end), 'linear', 'extrap');
+    end
+end
+if isempty(thetaInterpRes)
     thetaInterpRes = zeros(0,1);
 else
-    sRes = linspace(0, 1, targetSamples + 1);
-    baseInterp = interp1(sPath, path(:,1:2), sRes(2:end));
-    thetaInterpRes = interp1(sPath, unwrap(path(:,3)), sRes(2:end));
-    basePhaseSteps = size(baseInterp,1);
+    thetaInterpRes = wrapToPi(thetaInterpRes);
 end
 
 rampInfo.baseSteps = basePhaseSteps;
 rampInfo.steps = armPhaseSteps + basePhaseSteps;
 rampInfo.duration = rampInfo.steps * sampleDt;
-rampInfo.armDuration = rampInfo.armSteps * sampleDt;
-rampInfo.baseDuration = rampInfo.baseSteps * sampleDt;
+rampInfo.armDuration = armPhaseSteps * sampleDt;
+rampInfo.baseDuration = basePhaseSteps * sampleDt;
 rampInfo.sampleDt = sampleDt;
+rampInfo.basePathLength = pathLength;
 
 baseRamp = zeros(rampInfo.steps, 2);
 thetaRamp = zeros(rampInfo.steps, 1);
@@ -727,32 +912,50 @@ end
 
 if rampInfo.steps > 0
     rampEndPos = baseRamp(end, :);
-    rampEndYaw = thetaRamp(end);
 else
     rampEndPos = homePose(1:2);
-    rampEndYaw = homePose(3);
 end
-
-rawBaseWaypointsRamp = baseRamp;
-baseWaypointsRamp = baseRamp;
 
 refTimesRamp = refTimesIn(1) + (-rampInfo.steps:-1)' * sampleDt;
 
 refPositionsRamp = zeros(rampInfo.steps, size(refPositionsIn,2));
 refRPYRamp = zeros(rampInfo.steps, size(refRPYIn,2));
+
+
 if armPhaseSteps > 0
-    tauArm = linspace(0, 1, armPhaseSteps)';
-    interpArm = pointC + tauArm .* (pointD - pointC);
-    refPositionsRamp(1:armPhaseSteps, :) = interpArm;
-    if ~isempty(refRPYIn)
-        refRPYRamp(1:armPhaseSteps, :) = repmat(refRPYIn(1,:), armPhaseSteps, 1);
+    configFK = homeConfiguration(robot);
+    for k = 1:armPhaseSteps
+        for j = 1:numel(armIdxLocal)
+            configFK(armIdxLocal(j)).JointPosition = armRampJointTraj(k, j);
+        end
+        TeeSample = getTransform(robot, configFK, eeNameLocal);
+        refPositionsRamp(k, :) = TeeSample(1:3,4)';
+        if size(refRPYIn,2) >= 3
+            refRPYRamp(k, :) = rotm2eul(TeeSample(1:3,1:3), 'XYZ');
+        end
     end
 end
+
 if basePhaseSteps > 0
-    refPositionsRamp(armPhaseSteps+1:end, :) = repmat(pointD, basePhaseSteps, 1);
-    if ~isempty(refRPYIn)
-        refRPYRamp(armPhaseSteps+1:end, :) = repmat(refRPYIn(1,:), basePhaseSteps, 1);
+    configGoal = homeConfiguration(robot);
+    for j = 1:numel(armIdxLocal)
+        configGoal(armIdxLocal(j)).JointPosition = armRampJointTraj(end, j);
     end
+    TeeGoalRel = getTransform(robot, configGoal, eeNameLocal);
+    for k = 1:basePhaseSteps
+        Tbase = trvec2tform([baseInterp(k,:), 0]) * axang2tform([0 0 1 thetaInterpRes(k)]);
+        TeeWorld = Tbase * TeeGoalRel;
+        refPositionsRamp(armPhaseSteps + k, :) = TeeWorld(1:3,4)';
+        if size(refRPYIn,2) >= 3
+            refRPYRamp(armPhaseSteps + k, :) = rotm2eul(TeeWorld(1:3,1:3), 'XYZ');
+        end
+    end
+end
+
+
+if rampInfo.steps == 0
+    refPositionsRamp = zeros(0, size(refPositionsIn,2));
+    refRPYRamp = zeros(0, size(refRPYIn,2));
 end
 
 trackWaypoints = baseWaypointsIn;
@@ -761,7 +964,7 @@ trackRaw = rawBaseWaypointsIn;
 if isempty(trackWaypoints)
     baseWaypointsOut = baseRamp;
     thetaRefOut = thetaRamp;
-    rawBaseWaypointsOut = rawBaseWaypointsRamp;
+    rawBaseWaypointsOut = baseRamp;
     refPositionsOut = [refPositionsRamp; refPositionsIn];
     refRPYOut = [refRPYRamp; refRPYIn];
     refTimesOut = [refTimesRamp; refTimesIn];
@@ -769,25 +972,13 @@ if isempty(trackWaypoints)
     return;
 end
 
-[thetaRefTrackOrig, ~, ~] = compute_base_heading(trackWaypoints);
-trackInitYaw = thetaRefTrackOrig(1);
-trackInitPos = trackWaypoints(1, :);
+baseShift = rampEndPos - trackWaypoints(1,:);
+baseWaypointsAligned = trackWaypoints + baseShift;
+rawBaseWaypointsAligned = trackRaw + baseShift;
 
-relBase = trackWaypoints - trackInitPos;
-relRaw = trackRaw - trackRaw(1, :);
-yawDelta = wrapToPi(rampEndYaw - trackInitYaw);
-cy = cos(yawDelta);
-sy = sin(yawDelta);
-rotMat = [cy, -sy; sy, cy];
-
-baseWaypointsAligned = (relBase * rotMat.') + rampEndPos;
-rawBaseWaypointsAligned = (relRaw * rotMat.') + rampEndPos;
-
-[thetaRefTrackAligned, ~, ~] = compute_base_heading(baseWaypointsAligned);
-
+thetaRefOut = [thetaRamp; thetaRefIn];
 baseWaypointsOut = [baseRamp; baseWaypointsAligned];
-thetaRefOut = [thetaRamp; thetaRefTrackAligned];
-rawBaseWaypointsOut = [rawBaseWaypointsRamp; rawBaseWaypointsAligned];
+rawBaseWaypointsOut = [baseRamp; rawBaseWaypointsAligned];
 refPositionsOut = [refPositionsRamp; refPositionsIn];
 refRPYOut = [refRPYRamp; refRPYIn];
 refTimesOut = [refTimesRamp; refTimesIn];
@@ -813,7 +1004,6 @@ rampInfo.timeAdded = rampInfo.duration;
         quat = quat / max(norm(quat), 1e-12);
     end
 end
-
 
 function [baseWaypointsRefined, info] = refine_base_waypoints(robot, armJointNames, armTrajectory, thetaRef, refPositionsWorld, baseWaypointsNominal, eeName)
 info = struct('applied', false, 'reason', "", 'maxShift', 0, 'meanShift', 0);
@@ -1020,4 +1210,213 @@ end
 diagOut = struct('thetaRefTimeline', wrapToPi(thetaInterp(:)), ...
                  'scaleHistory', scaleHistory, ...
                  'directionSign', dirSign);
+end
+
+function homePose = compute_home_base_pose()
+%COMPUTE_HOME_BASE_POSE Return the default world-frame chassis home pose.
+homePose = [-2, -2, 0];
+end
+
+function armGoal = compute_arm_ramp_goal(homeEEPos, firstEEPos, refRPYIn, homeEERPY)
+%COMPUTE_ARM_RAMP_GOAL Define the virtual EE target used during arm warm-up.
+armGoal = struct();
+armGoal.position = [homeEEPos(1:2), firstEEPos(3)];
+if isempty(refRPYIn)
+    armGoal.rpy = homeEERPY;
+else
+    armGoal.rpy = refRPYIn(1,:);
+end
+armGoal.homeRPY = homeEERPY;
+end
+
+function targetPose = compute_chassis_ramp_goal(homePose, baseWaypointsIn, thetaRefIn, desiredYaw)
+%COMPUTE_CHASSIS_RAMP_GOAL Determine the base target pose for the chassis ramp.
+if isempty(baseWaypointsIn)
+    targetPose = homePose;
+else
+    if nargin >= 4 && ~isempty(desiredYaw)
+        yawVal = desiredYaw;
+    elseif ~isempty(thetaRefIn)
+        yawVal = thetaRefIn(1);
+    else
+        yawVal = homePose(3);
+    end
+    targetPose = [baseWaypointsIn(1,:), yawVal];
+end
+end
+
+function [seedConfigs, seedLabels, seedJointVectors] = build_arm_ramp_seed_set(configTemplate, armIdxLocal, qHome, robot, armJointNames)
+%BUILD_ARM_RAMP_SEED_SET Generate initial guesses for the warm-up IK solve.
+numJoints = numel(armIdxLocal);
+seedConfigs = {};
+seedLabels = {};
+seedJointVectors = zeros(0, numJoints);
+
+jointLimits = get_joint_position_limits(robot, armJointNames);
+
+add_seed(qHome, 'home');
+
+defaultAmplitude = deg2rad(40);
+for j = 1:numJoints
+    bounds = jointLimits(j,:);
+    amplitude = defaultAmplitude;
+    lowerBound = bounds(1);
+    upperBound = bounds(2);
+    if isfinite(lowerBound) && isfinite(upperBound) && upperBound > lowerBound
+        amplitude = min(amplitude, 0.45 * (upperBound - lowerBound));
+    end
+    if amplitude < 1e-4
+        continue;
+    end
+
+    lowerVec = qHome;
+    lowerVec(j) = clamp_joint_value(qHome(j) - amplitude, bounds);
+    if abs(lowerVec(j) - qHome(j)) > 1e-5
+        add_seed(lowerVec, sprintf('%s_lower', armJointNames{j}));
+    end
+
+    upperVec = qHome;
+    upperVec(j) = clamp_joint_value(qHome(j) + amplitude, bounds);
+    if abs(upperVec(j) - qHome(j)) > 1e-5
+        add_seed(upperVec, sprintf('%s_upper', armJointNames{j}));
+    end
+end
+
+pairCandidates = [2 3; 2 4; 3 4];
+pairOffset = deg2rad(30);
+for row = 1:size(pairCandidates, 1)
+    idxPair = pairCandidates(row, :);
+    if any(idxPair > numJoints)
+        continue;
+    end
+    for sign = [-1, 1]
+        pairVec = qHome;
+        pairVec(idxPair(1)) = clamp_joint_value(qHome(idxPair(1)) + sign * pairOffset, jointLimits(idxPair(1), :));
+        pairVec(idxPair(2)) = clamp_joint_value(qHome(idxPair(2)) - sign * pairOffset, jointLimits(idxPair(2), :));
+        if any(~isfinite(pairVec(idxPair)))
+            continue;
+        end
+        if norm(pairVec - qHome) > 1e-4
+            label = sprintf('combo_%s_%s', armJointNames{idxPair(1)}, armJointNames{idxPair(2)});
+            add_seed(pairVec, label);
+        end
+    end
+end
+
+if isempty(seedConfigs)
+    seedConfigs = {set_config_positions(configTemplate, armIdxLocal, qHome)};
+    seedLabels = {'home'};
+    seedJointVectors = qHome;
+end
+
+    function add_seed(qVec, label)
+        if any(~isfinite(qVec))
+            return;
+        end
+        if ~isempty(seedJointVectors)
+            diffs = seedJointVectors - qVec;
+            if any(vecnorm(diffs, 2, 2) < 1e-5)
+                return;
+            end
+        end
+        seedJointVectors(end+1, :) = qVec; %#ok<AGROW>
+        seedConfigs{end+1} = set_config_positions(configTemplate, armIdxLocal, qVec); %#ok<AGROW>
+        seedLabels{end+1} = label; %#ok<AGROW>
+    end
+end
+
+function value = clamp_joint_value(value, bounds)
+%CLAMP_JOINT_VALUE Apply finite position limits if available.
+lowerBound = bounds(1);
+upperBound = bounds(2);
+if ~isfinite(lowerBound)
+    lowerBound = -inf;
+end
+if ~isfinite(upperBound)
+    upperBound = inf;
+end
+if lowerBound > upperBound
+    lowerBound = upperBound;
+end
+value = min(max(value, lowerBound), upperBound);
+end
+
+function limits = get_joint_position_limits(robot, armJointNames)
+%GET_JOINT_POSITION_LIMITS Collect joint position limits for the arm.
+limits = nan(numel(armJointNames), 2);
+for bodyIdx = 1:numel(robot.Bodies)
+    jointObj = robot.Bodies{bodyIdx}.Joint;
+    matchIdx = find(strcmp(jointObj.Name, armJointNames), 1);
+    if ~isempty(matchIdx)
+        limits(matchIdx, :) = jointObj.PositionLimits;
+    end
+end
+for idx = 1:size(limits, 1)
+    if any(isnan(limits(idx, :)))
+        limits(idx, :) = [-inf, inf];
+    end
+end
+end
+
+function configOut = set_config_positions(configTemplate, armIdxLocal, qVec)
+%SET_CONFIG_POSITIONS Populate a configuration struct with provided joint values.
+configOut = configTemplate;
+for idx = 1:numel(armIdxLocal)
+    configOut(armIdxLocal(idx)).JointPosition = qVec(idx);
+end
+end
+
+function [configBest, qBest, qCandidates, seedSelection] = solve_arm_ramp_gik(gikSolver, cartBound, orientTarget, seedConfigs, armIdxLocal, qStart)
+%SOLVE_ARM_RAMP_GIK Evaluate IK across seeds and pick the closest to qStart.
+configs = cell(0, 1);
+qCandidates = zeros(0, numel(armIdxLocal));
+seedIndices = zeros(0, 1);
+
+for sIdx = 1:numel(seedConfigs)
+    try
+        solStruct = gikSolver(seedConfigs{sIdx}, cartBound, orientTarget);
+    catch
+        continue;
+    end
+    if isempty(solStruct)
+        continue;
+    end
+    qVec = zeros(1, numel(armIdxLocal));
+    valid = true;
+    for j = 1:numel(armIdxLocal)
+        posVal = solStruct(armIdxLocal(j)).JointPosition;
+        if ~isfinite(posVal)
+            valid = false;
+            break;
+        end
+        qVec(j) = posVal;
+    end
+    if ~valid
+        continue;
+    end
+    if ~isempty(qCandidates)
+        if any(vecnorm(qCandidates - qVec, 2, 2) < 1e-5)
+            continue;
+        end
+    end
+    configs{end+1} = solStruct; %#ok<AGROW>
+    qCandidates(end+1, :) = qVec; %#ok<AGROW>
+    seedIndices(end+1, 1) = sIdx; %#ok<AGROW>
+end
+
+if isempty(configs)
+    error('prepend_ramp_segment:IKFailure', 'Failed to compute an arm warm-up IK solution.');
+end
+
+if size(qCandidates, 1) > 1
+    deltas = qCandidates - qStart;
+    distances = vecnorm(deltas, 2, 2);
+    [~, bestIdx] = min(distances);
+else
+    bestIdx = 1;
+end
+
+configBest = configs{bestIdx};
+qBest = qCandidates(bestIdx, :);
+seedSelection = seedIndices(bestIdx);
 end

@@ -8,6 +8,9 @@ function [qMatrix, jointNames, infos] = rt_compute_arm_gik(robot, eeName, poseTf
 %     PositionTolerance    - scalar or vector tolerance (m) for EE position
 %     OrientationTolerance - scalar or vector tolerance (rad) for EE orientation
 %     JointBounds          - struct with fields JointNames, Lower, Upper
+%     DistanceConstraints  - cell array configuring constraintDistanceBounds
+%     CartesianBounds      - cell array configuring constraintCartesianBounds
+%     CollisionAvoidance   - cell array configuring constraintCollisionAvoidance
 %     ExtraConstraints     - cell array of additional constraint objects
 %     UseWarmStart         - logical flag (default true)
 %
@@ -30,27 +33,29 @@ end
 if ~isfield(options, 'JointBounds')
     options.JointBounds = struct([]);
 end
-if ~isfield(options, 'ExtraConstraints') || isempty(options.ExtraConstraints)
-    options.ExtraConstraints = {};
-end
-if ~isfield(options, 'UseWarmStart') || isempty(options.UseWarmStart)
-    options.UseWarmStart = true;
-end
 if ~isfield(options, 'DistanceConstraints') || isempty(options.DistanceConstraints)
     options.DistanceConstraints = {};
 end
 if ~isfield(options, 'CartesianBounds') || isempty(options.CartesianBounds)
     options.CartesianBounds = {};
 end
-if iscell(options.DistanceConstraints)
-    options.DistanceConstraints = options.DistanceConstraints(~cellfun(@isempty, options.DistanceConstraints));
+if ~isfield(options, 'CollisionAvoidance') || isempty(options.CollisionAvoidance)
+    options.CollisionAvoidance = {};
 end
-if iscell(options.CartesianBounds)
-    options.CartesianBounds = options.CartesianBounds(~cellfun(@isempty, options.CartesianBounds));
+if ~isfield(options, 'ExtraConstraints') || isempty(options.ExtraConstraints)
+    options.ExtraConstraints = {};
 end
-if iscell(options.ExtraConstraints)
-    options.ExtraConstraints = options.ExtraConstraints(~cellfun(@isempty, options.ExtraConstraints));
+if ~isfield(options, 'SolverParameters') || isempty(options.SolverParameters)
+    options.SolverParameters = struct();
 end
+if ~isfield(options, 'UseWarmStart') || isempty(options.UseWarmStart)
+    options.UseWarmStart = true;
+end
+
+options.DistanceConstraints = stripEmpty(options.DistanceConstraints);
+options.CartesianBounds = stripEmpty(options.CartesianBounds);
+options.CollisionAvoidance = stripEmpty(options.CollisionAvoidance);
+options.ExtraConstraints = stripEmpty(options.ExtraConstraints);
 
 [posCells, numPoses] = normalizeTransforms(poseTforms);
 configGuess = options.InitialGuess;
@@ -59,23 +64,77 @@ configGuess = options.InitialGuess;
 % Require constraint classes provided by Robotics System Toolbox
 validateConstraintAvailability(options);
 
+baseFrame = robot.BaseName;
+
 posTarget = constraintPositionTarget(eeName);
-posTarget.ReferenceBody = robot.BaseName;
-posTol = scalarTolerance(options.PositionTolerance);
-posTarget.PositionTolerance = posTol;
+posTarget.ReferenceBody = baseFrame;
+posTarget.PositionTolerance = scalarTolerance(options.PositionTolerance);
 
 oriTarget = constraintOrientationTarget(eeName);
-oriTarget.ReferenceBody = robot.BaseName;
-oriTol = scalarTolerance(options.OrientationTolerance);
-oriTarget.OrientationTolerance = oriTol;
+oriTarget.ReferenceBody = baseFrame;
+oriTarget.OrientationTolerance = scalarTolerance(options.OrientationTolerance);
 
 jointBounds = constraintJointBounds(robot);
 jointBounds.Bounds = [lowerBounds, upperBounds];
 
-numDistance = numel(options.DistanceConstraints);
-distanceObjects = cell(1, numDistance);
-for k = 1:numel(options.DistanceConstraints)
-    entry = options.DistanceConstraints{k};
+[distanceObjects, distanceInputs] = buildDistanceConstraints(robot, options.DistanceConstraints);
+[cartesianObjects, cartInputs] = buildCartesianConstraints(robot, options.CartesianBounds);
+[collisionObjects, collisionInputs] = buildCollisionConstraints(robot, options.CollisionAvoidance);
+extraInputs = cellfun(@classToConstraintInput, options.ExtraConstraints, 'UniformOutput', false);
+
+constraintInputs = ['position','orientation','jointbounds', distanceInputs, cartInputs, collisionInputs, extraInputs];
+
+gik = generalizedInverseKinematics('RigidBodyTree', robot, ...
+    'ConstraintInputs', constraintInputs);
+
+solverParamFields = fieldnames(options.SolverParameters);
+for idx = 1:numel(solverParamFields)
+    fieldName = solverParamFields{idx};
+    if isfield(gik.SolverParameters, fieldName)
+        gik.SolverParameters.(fieldName) = options.SolverParameters.(fieldName);
+    end
+end
+
+numJoints = numel(configGuess);
+qMatrix = zeros(numPoses, numJoints);
+infos = cell(1, numPoses);
+
+for idx = 1:numPoses
+    T = posCells{idx};
+    posTarget.TargetPosition = tform2trvec(T);
+    oriTarget.TargetOrientation = tform2quat(T);
+
+    constraintArgs = {posTarget, oriTarget, jointBounds};
+    if ~isempty(distanceObjects)
+        constraintArgs = [constraintArgs, distanceObjects]; %#ok<AGROW>
+    end
+    if ~isempty(cartesianObjects)
+        constraintArgs = [constraintArgs, cartesianObjects]; %#ok<AGROW>
+    end
+    if ~isempty(collisionObjects)
+        constraintArgs = [constraintArgs, collisionObjects]; %#ok<AGROW>
+    end
+    if ~isempty(options.ExtraConstraints)
+        constraintArgs = [constraintArgs, options.ExtraConstraints]; %#ok<AGROW>
+    end
+
+    [configSol, solutionInfo] = gik(configGuess, constraintArgs{:});
+    infos{idx} = solutionInfo;
+    for j = 1:numJoints
+        qMatrix(idx, j) = configSol(j).JointPosition;
+    end
+    if options.UseWarmStart
+        configGuess = configSol;
+    end
+end
+
+end
+
+function [objects, inputs] = buildDistanceConstraints(robot, entries)
+numEntries = numel(entries);
+objects = cell(1, numEntries);
+for k = 1:numEntries
+    entry = entries{k};
     if iscell(entry)
         entry = entry{1};
     end
@@ -94,20 +153,21 @@ for k = 1:numel(options.DistanceConstraints)
         distObj.ReferenceBody = robot.BaseName;
     end
     if isfield(entry, 'Bounds') && ~isempty(entry.Bounds)
-        bounds = entry.Bounds;
-        bounds = makeFinite(bounds);
-        distObj.Bounds = bounds;
+        distObj.Bounds = makeFinite(entry.Bounds);
     end
     if isfield(entry, 'Weights') && ~isempty(entry.Weights)
         distObj.Weights = entry.Weights;
     end
-    distanceObjects{k} = distObj;
+    objects{k} = distObj;
+end
+inputs = repmat({'distance'}, 1, numEntries);
 end
 
-numCartesian = numel(options.CartesianBounds);
-cartesianObjects = cell(1, numCartesian);
-for k = 1:numel(options.CartesianBounds)
-    entry = options.CartesianBounds{k};
+function [objects, inputs] = buildCartesianConstraints(robot, entries)
+numEntries = numel(entries);
+objects = cell(1, numEntries);
+for k = 1:numEntries
+    entry = entries{k};
     if iscell(entry)
         entry = entry{1};
     end
@@ -134,52 +194,42 @@ for k = 1:numel(options.CartesianBounds)
     if isfield(entry, 'Weights') && ~isempty(entry.Weights)
         cartObj.Weights = entry.Weights;
     end
-    cartesianObjects{k} = cartObj;
+    objects{k} = cartObj;
+end
+inputs = repmat({'cartesian'}, 1, numEntries);
 end
 
-constraintInputs = {'position','orientation','jointbounds'};
-if numDistance > 0
-    constraintInputs = [constraintInputs, repmat({'distance'}, 1, numDistance)];
+function [objects, inputs] = buildCollisionConstraints(robot, entries)
+numEntries = numel(entries);
+objects = cell(1, numEntries);
+for k = 1:numEntries
+    entry = entries{k};
+    if isa(entry, 'constraintCollisionAvoidance')
+        objects{k} = entry;
+        continue;
+    end
+    if iscell(entry)
+        entry = entry{1};
+    end
+    collObj = constraintCollisionAvoidance(robot);
+    if isfield(entry, 'Environment') && ~isempty(entry.Environment)
+        collObj.Environment = entry.Environment;
+    end
+    if isfield(entry, 'CollisionPairs') && ~isempty(entry.CollisionPairs)
+        collObj.CollisionPairs = entry.CollisionPairs;
+    end
+    if isfield(entry, 'Weights') && ~isempty(entry.Weights)
+        collObj.Weights = entry.Weights;
+    end
+    if isfield(entry, 'NumSamples') && ~isempty(entry.NumSamples)
+        collObj.NumSamples = entry.NumSamples;
+    end
+    if isfield(entry, 'SelfCollisions') && ~isempty(entry.SelfCollisions)
+        collObj.SelfCollisions = logical(entry.SelfCollisions);
+    end
+    objects{k} = collObj;
 end
-if numCartesian > 0
-    constraintInputs = [constraintInputs, repmat({'cartesian'}, 1, numCartesian)];
-end
-if ~isempty(options.ExtraConstraints)
-    extraInputs = cellfun(@classToConstraintInput, options.ExtraConstraints, 'UniformOutput', false);
-    constraintInputs = [constraintInputs, extraInputs(:)'];
-end
-
-gik = generalizedInverseKinematics('RigidBodyTree', robot, ...
-    'ConstraintInputs', constraintInputs);
-
-numJoints = numel(configGuess);
-qMatrix = zeros(numPoses, numJoints);
-infos = cell(1, numPoses);
-
-for idx = 1:numPoses
-    T = posCells{idx};
-    posTarget.TargetPosition = tform2trvec(T);
-    oriTarget.TargetOrientation = tform2quat(T);
-    constraintArgs = {posTarget, oriTarget, jointBounds};
-    if numDistance > 0
-        constraintArgs = [constraintArgs, distanceObjects];
-    end
-    if numCartesian > 0
-        constraintArgs = [constraintArgs, cartesianObjects];
-    end
-    if ~isempty(options.ExtraConstraints)
-        constraintArgs = [constraintArgs, options.ExtraConstraints];
-    end
-    [configSol, solutionInfo] = gik(configGuess, constraintArgs{:});
-    infos{idx} = solutionInfo;
-    for j = 1:numJoints
-        qMatrix(idx, j) = configSol(j).JointPosition;
-    end
-    if options.UseWarmStart
-        configGuess = configSol;
-    end
-end
-
+inputs = repmat({'collisionavoidance'}, 1, numEntries);
 end
 
 function tolScalar = scalarTolerance(val)
@@ -202,6 +252,14 @@ elseif isnumeric(poseTforms)
     end
 else
     error('poseTforms must be a cell array or an N-by-16 numeric array.');
+end
+end
+
+function arr = stripEmpty(arr)
+if iscell(arr)
+    arr = arr(~cellfun(@isempty, arr));
+elseif isempty(arr)
+    arr = {};
 end
 end
 
@@ -262,6 +320,8 @@ elseif contains(className, 'CartesianBounds', 'IgnoreCase', true)
     name = 'cartesian';
 elseif contains(className, 'DistanceBounds', 'IgnoreCase', true)
     name = 'distance';
+elseif contains(className, 'CollisionAvoidance', 'IgnoreCase', true)
+    name = 'collisionavoidance';
 elseif contains(className, 'Aiming', 'IgnoreCase', true)
     name = 'aiming';
 else
@@ -285,6 +345,9 @@ if ~isempty(options.DistanceConstraints)
 end
 if ~isempty(options.CartesianBounds)
     requiredClasses{end+1} = 'constraintCartesianBounds'; %#ok<AGROW>
+end
+if ~isempty(options.CollisionAvoidance)
+    requiredClasses{end+1} = 'constraintCollisionAvoidance'; %#ok<AGROW>
 end
 for i = 1:numel(requiredClasses)
     if ~exist(requiredClasses{i}, 'class') && ~exist(requiredClasses{i}, 'file')

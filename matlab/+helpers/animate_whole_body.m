@@ -44,6 +44,8 @@ arguments
     options.ChassisScale double = 1e-3
     options.StageBreakIndex double = 1
     options.StageLabels (1,:) string = ["Ramp-up", "Tracking"]
+    options.StageBoundaries double = []
+    options.StageSelection string = "all"
 end
 
 if options.VisualAlpha < 0 || options.VisualAlpha > 1
@@ -53,9 +55,7 @@ if options.ChassisScale <= 0
     error('options.ChassisScale must be positive.');
 end
 stageLabels = string(options.StageLabels);
-if numel(stageLabels) < 2
-    stageLabels = [stageLabels, repmat(stageLabels(end), 1, 2-numel(stageLabels))];
-end
+stageSelection = lower(string(options.StageSelection));
 stageBreak = max(1, round(options.StageBreakIndex));
 
 % Work on a copy so visual tweaks don't leak back to caller
@@ -73,19 +73,97 @@ if options.HideEndEffectorVisual
 end
 
 % Validate sizes
+
 numSteps = size(armTrajectory, 1);
 if numSteps ~= numel(armTimes)
     error('armTrajectory rows (%d) must match numel(armTimes) (%d).', numSteps, numel(armTimes));
 end
+armTimes = armTimes(:)';
+baseTimes = baseTimes(:)';
 stageBreak = min(stageBreak, numSteps + 1);
+
+if isempty(options.StageBoundaries)
+    defaultBoundaries = [stageBreak - 1, numSteps];
+else
+    defaultBoundaries = options.StageBoundaries(:)';
+end
+if isempty(defaultBoundaries)
+    defaultBoundaries = numSteps;
+end
+stageBoundaries = round(defaultBoundaries);
+stageBoundaries(stageBoundaries < 1) = 1;
+stageBoundaries(stageBoundaries > numSteps) = numSteps;
+stageBoundaries = unique(stageBoundaries);
+if stageBoundaries(end) ~= numSteps
+    stageBoundaries = [stageBoundaries, numSteps];
+end
+numStages = numel(stageBoundaries);
+if numel(stageLabels) < numStages
+    stageLabels(end+1:numStages) = stageLabels(end);
+elseif numel(stageLabels) > numStages
+    stageLabels = stageLabels(1:numStages);
+end
+stageStarts = [1, stageBoundaries(1:end-1) + 1];
+stageRanges = arrayfun(@(s,e) s:e, stageStarts, stageBoundaries, 'UniformOutput', false);
+
+switch stageSelection
+    case {'all','*'}
+        frameIdx = 1:numSteps;
+        stageBoundariesActive = stageBoundaries;
+        stageLabelsActive = stageLabels;
+    case {'arm','arm_ramp','arm-ramp'}
+        frameIdx = stageRanges{1};
+        stageBoundariesActive = stageBoundaries(1);
+        stageLabelsActive = stageLabels(1);
+    case {'chassis','chassis_ramp','base_ramp'}
+        if numStages < 2
+            error('animate_whole_body:StageSelection', 'Chassis ramp stage not available.');
+        end
+        stageIdx = min(2, numStages);
+        frameIdx = stageRanges{stageIdx};
+        stageBoundariesActive = stageBoundaries(stageIdx) - stageBoundaries(stageIdx-1);
+        stageLabelsActive = stageLabels(stageIdx);
+    case {'tracking','track'}
+        frameIdx = stageRanges{end};
+        if numStages >= 2
+            prevEnd = stageBoundaries(end-1);
+        else
+            prevEnd = 0;
+        end
+        stageBoundariesActive = stageBoundaries(end) - prevEnd;
+        stageLabelsActive = stageLabels(end);
+    otherwise
+        error('animate_whole_body:StageSelection', 'Unknown StageSelection option: %s.', stageSelection);
+end
+
+frameIdx = frameIdx(:)';
+armTrajectory = armTrajectory(frameIdx, :);
+armTimes = armTimes(frameIdx);
+armTimes = armTimes - armTimes(1);
+numSteps = numel(frameIdx);
+
+stageBoundariesActive = round(stageBoundariesActive);
+if isempty(stageBoundariesActive)
+    stageBoundariesActive = numSteps;
+end
+stageBoundariesActive(stageBoundariesActive < 1) = 1;
+stageBoundariesActive(stageBoundariesActive > numSteps) = numSteps;
+if stageBoundariesActive(end) ~= numSteps
+    stageBoundariesActive(end+1) = numSteps;
+end
+stageLabelsActive = string(stageLabelsActive);
+if numel(stageLabelsActive) < numel(stageBoundariesActive)
+    stageLabelsActive(end+1:numel(stageBoundariesActive)) = stageLabelsActive(end);
+elseif numel(stageLabelsActive) > numel(stageBoundariesActive)
+    stageLabelsActive = stageLabelsActive(1:numel(stageBoundariesActive));
+end
+
 if size(basePose,2) ~= 3
     error('basePose must be K-by-3 with columns [x y yaw].');
 end
 if numel(baseTimes) ~= size(basePose,1)
     error('baseTimes length must equal number of basePose rows.');
 end
-armTimes = armTimes(:)';
-baseTimes = baseTimes(:)';
 
 % Interpolate base pose onto arm timeline
 baseX = interp1(baseTimes, basePose(:,1), armTimes, 'linear', 'extrap');
@@ -230,11 +308,11 @@ for k = 1:numSteps
     set(actualMarker, 'XData', actualEE(k,1), 'YData', actualEE(k,2), 'ZData', actualEE(k,3));
     set(actualLine, 'XData', actualEE(1:k,1), 'YData', actualEE(1:k,2), 'ZData', actualEE(1:k,3));
 
-    if k < stageBreak
-        set(stageText, 'String', char(stageLabels(1)));
-    else
-        set(stageText, 'String', char(stageLabels(min(2, numel(stageLabels)))));
+    stageIdx = find(k <= stageBoundariesActive, 1, 'first');
+    if isempty(stageIdx)
+        stageIdx = numel(stageBoundariesActive);
     end
+    stageText.String = sprintf('%s (frame %d/%d)', stageLabelsActive(stageIdx), k, numSteps);
 
     drawnow limitrate;
     if ~isempty(videoWriter)
