@@ -64,6 +64,26 @@ if ~isfolder(outputDir)
     mkdir(outputDir);
 end
 
+if exist('use_gik', 'var') && ~isempty(use_gik)
+    useGeneralizedIK = logical(use_gik);
+else
+    useGeneralizedIK = false;
+end
+
+gikOptions = struct('PositionTolerance', 0.005, ...
+                    'OrientationTolerance', deg2rad(3), ...
+                    'ExtraConstraints', {{}}, ...
+                    'UseWarmStart', true, ...
+                    'DistanceConstraints', {{}}, ...
+                    'CartesianBounds', {{}}, ...
+                    'JointBounds', struct([]));
+if exist('gik_options', 'var') && ~isempty(gik_options) && isstruct(gik_options)
+    optFields = fieldnames(gik_options);
+    for fIdx = 1:numel(optFields)
+        gikOptions.(optFields{fIdx}) = gik_options.(optFields{fIdx});
+    end
+end
+
 if strlength(trajFileLocal) > 0
     [~, outputBase, ~] = fileparts(trajFileLocal);
 else
@@ -90,6 +110,24 @@ homeConfig = homeConfiguration(robot);
 TeeHome = getTransform(robot, homeConfig, eeName);
 homeEEPosition = TeeHome(1:3,4)';
 homeEERPY = rotm2eul(TeeHome(1:3,1:3), 'XYZ');
+
+if useGeneralizedIK
+    if isempty(gikOptions.DistanceConstraints)
+        defaultDist = struct('EndEffector', eeName, ...
+                             'ReferenceBody', 'left_arm_base_link', ...
+                             'Bounds', [0.30, 5.0], ...
+                             'Weights', 1.0);
+        gikOptions.DistanceConstraints = {defaultDist};
+    end
+    if isempty(gikOptions.CartesianBounds)
+        defaultCart = struct('EndEffector', eeName, ...
+                             'ReferenceBody', robot.BaseName, ...
+                             'Bounds', [-Inf, Inf; -Inf, Inf; 0.30, Inf], ...
+                             'TargetTransform', eye(4), ...
+                             'Weights', [1 1 1]);
+        gikOptions.CartesianBounds = {defaultCart};
+    end
+end
 
 %% Load reference trajectory (camera/world space)
 trajOpts = struct('source', char(trajSourceLocal), ...
@@ -136,7 +174,10 @@ end
 [baseWaypointsAug, thetaRefAug, rawBaseWaypointsAug, refPositionsAug, refRPYAug, refTimesAug, rampInfo] = ...
     prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, homeEEPosition, homeEERPY);
 
+baseWaypointsNominalFull = baseWaypointsAug;
+rawBaseWaypointsFull = rawBaseWaypointsAug;
 [thetaRefAug, ~, ~] = compute_base_heading(baseWaypointsAug);
+thetaRefNominalFull = thetaRefAug;
 
 rampSamples = rampInfo.steps;
 armRampSamples = rampInfo.armSteps;
@@ -151,32 +192,27 @@ if isempty(trackIdx)
     error('prepend_ramp_segment:NoTrackingData', 'Ramp generation consumed all samples; no tracking segment remains.');
 end
 
+refTimesRamp = refTimesAug(rampIdx);
 baseWaypointsRamp = baseWaypointsAug(rampIdx, :);
 thetaRampNominal = thetaRefAug(rampIdx);
 rawBaseWaypointsRamp = rawBaseWaypointsAug(rampIdx, :);
-refPositionsRamp = refPositionsAug(rampIdx, :);
-refRPYRamp = refRPYAug(rampIdx, :);
-refTimesRamp = refTimesAug(rampIdx);
 
-baseWaypointsNominal = baseWaypointsAug(trackIdx, :);
-thetaRefNominal = thetaRefAug(trackIdx);
-rawBaseWaypoints = rawBaseWaypointsAug(trackIdx, :);
+poseTformsNominal = build_base_to_ee_targets(baseWaypointsAug, thetaRefAug, refPositionsAug, refRPYAug);
+
 refPositionsWorld = refPositionsAug(trackIdx, :);
 refRPYWorld = refRPYAug(trackIdx, :);
 refTimes = refTimesAug(trackIdx);
+baseWaypointsNominal = baseWaypointsAug(trackIdx, :);
+rawBaseWaypoints = rawBaseWaypointsAug(trackIdx, :);
 
-baseWaypointsNominalFull = [baseWaypointsRamp; baseWaypointsNominal];
-rawBaseWaypointsFull = [rawBaseWaypointsRamp; rawBaseWaypoints];
-[thetaRefNominalFull, ~, ~] = compute_base_heading(baseWaypointsNominalFull);
-
-if ~isempty(refTimes)
-    refTimes = refTimes - refTimes(1);
+[qMatrixNominal, jointNamesNominal, ikInfosNominal] = deal([]);
+if useGeneralizedIK
+    gikOptsNominal = gikOptions;
+    gikOptsNominal.InitialGuess = homeConfig;
+    [qMatrixNominal, jointNamesNominal, ikInfosNominal] = rt_compute_arm_gik(robot, eeName, poseTformsNominal, gikOptsNominal);
+else
+    [qMatrixNominal, jointNamesNominal, ikInfosNominal] = rt_compute_arm_ik(robot, eeName, poseTformsNominal);
 end
-refTimes = refTimes(:);
-
-poseTformsNominal = build_base_to_ee_targets(baseWaypointsNominal, thetaRefNominal, refPositionsWorld, refRPYWorld);
-
-[qMatrixNominal, jointNamesNominal, ikInfosNominal] = rt_compute_arm_ik(robot, eeName, poseTformsNominal);
 [foundJoints, armIdx] = ismember(armJointNames, jointNamesNominal);
 if any(~foundJoints)
     error('One or more arm joints missing from imported robot model.');
@@ -193,7 +229,21 @@ baseRefineInfo = struct('applied', false, 'reason', "disabled", 'maxShift', 0, '
 [thetaRef, arcLen, segmentDist] = compute_base_heading(baseWaypointsRef);
 poseTformsBase = build_base_to_ee_targets(baseWaypointsRef, thetaRef, refPositionsWorld, refRPYWorld);
 
-[qMatrixRefined, jointNamesRefined, ikInfosRefined] = rt_compute_arm_ik(robot, eeName, poseTformsBase);
+if useGeneralizedIK
+    seedConfigRef = homeConfiguration(robot);
+    for cfgIdx = 1:numel(seedConfigRef)
+        name = seedConfigRef(cfgIdx).JointName;
+        matchIdx = find(strcmp(jointNamesNominal, name), 1);
+        if ~isempty(matchIdx)
+            seedConfigRef(cfgIdx).JointPosition = armTrajectoryNominal(1, matchIdx);
+        end
+    end
+    gikOptsRef = gikOptions;
+    gikOptsRef.InitialGuess = seedConfigRef;
+    [qMatrixRefined, jointNamesRefined, ikInfosRefined] = rt_compute_arm_gik(robot, eeName, poseTformsBase, gikOptsRef);
+else
+    [qMatrixRefined, jointNamesRefined, ikInfosRefined] = rt_compute_arm_ik(robot, eeName, poseTformsBase);
+end
 [foundJoints, armIdx] = ismember(armJointNames, jointNamesRefined);
 if any(~foundJoints)
     error('One or more arm joints missing from imported robot model after refinement.');
@@ -261,7 +311,14 @@ for j = 1:numel(initialConfig)
     end
 end
 
-[qMatrixFinal, jointNamesFinal, ikInfosFinal] = rt_compute_arm_ik(robot, eeName, poseTformsFinal, [0.5 0.5 0.5 1 1 1], initialConfig);
+[qMatrixFinal, jointNamesFinal, ikInfosFinal] = deal([]);
+if useGeneralizedIK
+    gikOptsFinal = gikOptions;
+    gikOptsFinal.InitialGuess = initialConfig;
+    [qMatrixFinal, jointNamesFinal, ikInfosFinal] = rt_compute_arm_gik(robot, eeName, poseTformsFinal, gikOptsFinal);
+else
+    [qMatrixFinal, jointNamesFinal, ikInfosFinal] = rt_compute_arm_ik(robot, eeName, poseTformsFinal, [0.5 0.5 0.5 1 1 1], initialConfig);
+end
 [foundJointsFinal, armIdxFinal] = ismember(armJointNames, jointNamesFinal);
 if any(~foundJointsFinal)
     error('One or more arm joints missing from final IK solve.');
@@ -447,7 +504,12 @@ xlabel('X (m)'); ylabel('Y (m)'); legend('Location','bestoutside');
 title('Chassis trajectory synchronized with arm timeline');
 
 %% Summaries
-fprintf('Generated %d arm samples via IK.\n', size(armTrajectory,1));
+if useGeneralizedIK
+    ikLabel = 'GIK';
+else
+    ikLabel = 'IK';
+end
+fprintf('Generated %d arm samples via %s.\n', size(armTrajectory,1), ikLabel);
 fprintf('Timeline duration: %.2f s across %d synchronized samples.\n', tVec(end), numel(tVec));
 fprintf('Base timeline scale factor: %.2f (>=1 implies slowing due to limits).\n', scaleFactor);
 fprintf('Max base speed: %.3f m/s, Max base yaw rate: %.3f rad/s.\n', max(vBaseWorldMag), max(abs(omegaBase)));
@@ -505,6 +567,17 @@ results.ikJointLimitFlags = ikJointLimitFlags;
 results.ikConverged = ikConvergedFlags;
 results.ikPoseTolerance = ikPoseTol;
 results.ikInfos = struct('nominal', {ikInfosNominal}, 'refined', {ikInfosRefined}, 'final', {ikInfosFinal});
+if useGeneralizedIK
+    results.ikMode = "gik";
+    results.gikSettings = struct('PositionTolerance', gikOptions.PositionTolerance, ...
+                                 'OrientationTolerance', gikOptions.OrientationTolerance, ...
+                                 'UseWarmStart', gikOptions.UseWarmStart, ...
+                                 'ExtraConstraintCount', numel(gikOptions.ExtraConstraints), ...
+                                 'DistanceConstraintCount', numel(gikOptions.DistanceConstraints), ...
+                                 'CartesianBoundsCount', numel(gikOptions.CartesianBounds));
+else
+    results.ikMode = "ik";
+end
 ikInfos = results.ikInfos;
 assignin('base', 'rt_results', results);
 assignin('base', 'rt_ikInfos', ikInfos);
@@ -577,19 +650,25 @@ end
 function [baseWaypointsOut, thetaRefOut, rawBaseWaypointsOut, refPositionsOut, refRPYOut, refTimesOut, rampInfo] = ...
     prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, homeEEPos, homeEERPY)
 
-homePose = [0, 0, 0];
-eeHomeXY = homeEEPos(1:2);
-eeTargetXY = refPositionsIn(1,1:2);
-deltaXY = eeTargetXY - eeHomeXY;
-targetXY = homePose(1:2) + deltaXY;
-targetPose = [targetXY, thetaRefIn(1)];
+pointD = refPositionsIn(1, :);
+pointC = pointD;
+pointC(1) = pointC(1) - 1.0;
+pointC(2) = pointC(2) - 0.5;
+
+pointB = [pointD(1) - 0.3, pointD(2) - 0.3, 0];
+pointA = [pointB(1) + 1.0, pointB(2) + 0.5, 0];
+
+homePose = [pointA(1), pointA(2), 0];
+targetPose = [pointB(1), pointB(2), 0];
 
 posError = norm(targetPose(1:2) - homePose(1:2));
 yawError = abs(wrapToPi(targetPose(3) - homePose(3)));
 
 rampInfo = struct('enabled', false, 'duration', 0, 'steps', 0, ...
     'startPose', homePose, 'targetPose', targetPose, 'timeAdded', 0, ...
-    'armSteps', 0, 'baseSteps', 0);
+    'armSteps', 0, 'baseSteps', 0, ...
+    'eeStart', pointC, 'eeGoal', pointD, ...
+    'baseStart', pointA, 'baseGoal', pointB);
 
 if posError < 1e-4 && yawError < deg2rad(0.5)
     baseWaypointsOut = baseWaypointsIn;
@@ -646,16 +725,69 @@ if basePhaseSteps > 0
     thetaRamp(armPhaseSteps+1:end) = thetaInterpRes(:);
 end
 
+if rampInfo.steps > 0
+    rampEndPos = baseRamp(end, :);
+    rampEndYaw = thetaRamp(end);
+else
+    rampEndPos = homePose(1:2);
+    rampEndYaw = homePose(3);
+end
+
+rawBaseWaypointsRamp = baseRamp;
+baseWaypointsRamp = baseRamp;
+
 refTimesRamp = refTimesIn(1) + (-rampInfo.steps:-1)' * sampleDt;
 
-firstPos = refPositionsIn(1,:);
-posRamp = repmat(refPositionsIn(1,:), rampInfo.steps, 1);
-refRPYRamp = repmat(refRPYIn(1,:), rampInfo.steps, 1);
-refPositionsRamp = posRamp;
+refPositionsRamp = zeros(rampInfo.steps, size(refPositionsIn,2));
+refRPYRamp = zeros(rampInfo.steps, size(refRPYIn,2));
+if armPhaseSteps > 0
+    tauArm = linspace(0, 1, armPhaseSteps)';
+    interpArm = pointC + tauArm .* (pointD - pointC);
+    refPositionsRamp(1:armPhaseSteps, :) = interpArm;
+    if ~isempty(refRPYIn)
+        refRPYRamp(1:armPhaseSteps, :) = repmat(refRPYIn(1,:), armPhaseSteps, 1);
+    end
+end
+if basePhaseSteps > 0
+    refPositionsRamp(armPhaseSteps+1:end, :) = repmat(pointD, basePhaseSteps, 1);
+    if ~isempty(refRPYIn)
+        refRPYRamp(armPhaseSteps+1:end, :) = repmat(refRPYIn(1,:), basePhaseSteps, 1);
+    end
+end
 
-baseWaypointsOut = [baseRamp; baseWaypointsIn];
-thetaRefOut = [thetaRamp; thetaRefIn];
-rawBaseWaypointsOut = [baseRamp; rawBaseWaypointsIn];
+trackWaypoints = baseWaypointsIn;
+trackRaw = rawBaseWaypointsIn;
+
+if isempty(trackWaypoints)
+    baseWaypointsOut = baseRamp;
+    thetaRefOut = thetaRamp;
+    rawBaseWaypointsOut = rawBaseWaypointsRamp;
+    refPositionsOut = [refPositionsRamp; refPositionsIn];
+    refRPYOut = [refRPYRamp; refRPYIn];
+    refTimesOut = [refTimesRamp; refTimesIn];
+    rampInfo.timeAdded = rampInfo.duration;
+    return;
+end
+
+[thetaRefTrackOrig, ~, ~] = compute_base_heading(trackWaypoints);
+trackInitYaw = thetaRefTrackOrig(1);
+trackInitPos = trackWaypoints(1, :);
+
+relBase = trackWaypoints - trackInitPos;
+relRaw = trackRaw - trackRaw(1, :);
+yawDelta = wrapToPi(rampEndYaw - trackInitYaw);
+cy = cos(yawDelta);
+sy = sin(yawDelta);
+rotMat = [cy, -sy; sy, cy];
+
+baseWaypointsAligned = (relBase * rotMat.') + rampEndPos;
+rawBaseWaypointsAligned = (relRaw * rotMat.') + rampEndPos;
+
+[thetaRefTrackAligned, ~, ~] = compute_base_heading(baseWaypointsAligned);
+
+baseWaypointsOut = [baseRamp; baseWaypointsAligned];
+thetaRefOut = [thetaRamp; thetaRefTrackAligned];
+rawBaseWaypointsOut = [rawBaseWaypointsRamp; rawBaseWaypointsAligned];
 refPositionsOut = [refPositionsRamp; refPositionsIn];
 refRPYOut = [refRPYRamp; refRPYIn];
 refTimesOut = [refTimesRamp; refTimesIn];
