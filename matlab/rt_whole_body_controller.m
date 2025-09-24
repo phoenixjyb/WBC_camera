@@ -918,7 +918,7 @@ if armPhaseSteps > 0
 end
 if basePhaseSteps > 0
     baseRamp(armPhaseSteps+1:end, :) = baseInterp;
-    thetaRamp(armPhaseSteps+1:end) = thetaInterpRes(:);
+    thetaRamp(armPhaseSteps+1:end) = linspace(homePose(3), targetPose(3), basePhaseSteps)';
 end
 
 if rampInfo.steps > 0

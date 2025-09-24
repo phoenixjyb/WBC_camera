@@ -27,3 +27,6 @@
 - Smoothed the arm warm-up by generating a 20-sample quintic joint trajectory (0.1 s spacing) and capturing the velocities/accelerations for reuse during ramp playback.
 - Defaulted the MATLAB demo driver to `use_gik = true` so the full trajectory solve can honor the same collision settings; the documentation now calls out the GIK-based flow.
 - Note: running the demo on the current MATLAB build still triggers joint-limit warnings and reports ~0.2 m tracking spikes—these stem from the source trajectory rather than the new ramp logic and remain on the follow-up list.
+- Hardened the animation helper by removing stale robot visuals and disabling `FastUpdate` so each frame reflects the current ramp joints; rerendered inspection videos have no frozen poses.
+- Added `run_arm_ramp_inspection.m` to regenerate ramp-only plots (joint angles/velocities, EE axes) and a slow-motion MP4 with the base locked in place via `matlab -batch "run_arm_ramp_inspection"`.
+- Refreshed the collision mesh loader to accept struct/name-value options and degrade gracefully if the STL is missing; re-exported ramp inspection assets (`arm_ramp_inspection_*`).
