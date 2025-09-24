@@ -318,9 +318,14 @@ else
     baseSpeedLimit = max(baseSpeedLimit, 0.05);
 end
 
+thetaRampEnd = homeBasePose(3);
+if ~isempty(thetaRampNominal)
+    thetaRampEnd = thetaRampNominal(end);
+end
+
 [baseXTrack, baseYTrack, thetaTrack, vBaseTrack, omegaBaseTrack, scaleFactor, armTimesTrack, armVelTimedTrack, retimeInfo, syncDiag] = ...
     synchronize_base_trajectory(baseWaypointsRef, thetaRef, arcLen, refTimes, ...
-                                armTimesTrack, armVelTimedTrack, retimeInfo, baseLimits, baseSpeedLimit);
+                                armTimesTrack, armVelTimedTrack, retimeInfo, baseLimits, baseSpeedLimit, thetaRampEnd);
 poseHistoryTrack = [baseXTrack, baseYTrack, thetaTrack];
 thetaRefSyncTrack = syncDiag.thetaRefTimeline;
 
@@ -1128,7 +1133,11 @@ end
 
 function [baseX, baseY, theta, vBase, omegaBase, scaleAccum, armTimes, armVel, retimeInfo, diagOut] = ...
     synchronize_base_trajectory(baseWaypointsRef, thetaRef, arcLen, refTimes, ...
-                                armTimes, armVel, retimeInfo, baseLimits, baseSpeedLimit)
+                                armTimes, armVel, retimeInfo, baseLimits, baseSpeedLimit, initialHeading)
+if nargin < 10 || isempty(initialHeading)
+    initialHeading = thetaRef(1);
+end
+initialHeading = wrapToPi(initialHeading);
 scaleAccum = 1;
 scaleHistory = scaleAccum;
 baseTimeMin = arcLen(end) / max(baseSpeedLimit, 1e-6);
@@ -1163,10 +1172,11 @@ for iter = 1:maxIter
     baseX = baseX(:);
     baseY = baseY(:);
     thetaNominal = unwrap(thetaInterp(:));
+    thetaNominal(1) = initialHeading;
 
     heading = zeros(size(thetaNominal));
     dirLocal = ones(size(thetaNominal));
-    heading(1) = thetaNominal(1);
+    heading(1) = initialHeading;
     for k = 2:numel(thetaNominal)
         dx = baseX(k) - baseX(k-1);
         dy = baseY(k) - baseY(k-1);
@@ -1180,11 +1190,19 @@ for iter = 1:maxIter
         backwardDelta = wrapToPi(desiredYaw + pi - heading(k-1));
         if abs(backwardDelta) < abs(forwardDelta)
             dirLocal(k) = -1;
-            heading(k) = heading(k-1) + backwardDelta;
+            deltaTarget = backwardDelta;
         else
             dirLocal(k) = 1;
-            heading(k) = heading(k-1) + forwardDelta;
+            deltaTarget = forwardDelta;
         end
+
+        dtStep = max(armTimes(k) - armTimes(k-1), 1e-6);
+        maxDelta = baseLimits.omega_max * dtStep;
+        deltaTarget = wrapToPi(deltaTarget);
+        if abs(deltaTarget) > maxDelta
+            deltaTarget = sign(deltaTarget) * maxDelta;
+        end
+        heading(k) = heading(k-1) + deltaTarget;
     end
     theta = unwrap(heading(:));
 

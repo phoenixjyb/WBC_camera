@@ -1,32 +1,20 @@
 # Development Diary
 
-## 2025-09-22
-- Added two-phase ramp-up: arm aligns to first EE waypoint while chassis holds pose, then chassis slides to ground-plane alignment; ramp metadata (arm/base steps, duration) now stored for later analysis.
+## 2025-09-24
+- Added two-phase ramp-up: arm aligns to first EE waypoint while the chassis holds pose, then the chassis slides to ground-plane alignment; ramp metadata (arm/base steps, duration) now stored for later analysis.
 - Updated base synchronisation to choose the minimal-yaw-change heading so the chassis can reverse instead of spinning; longitudinal velocity can go negative and direction sign is logged.
 - Animation helper now reflects ramp vs tracking stages with captions, darker theme, and more visible chassis path; metrics only evaluate tracking samples and results MAT exports tracking-specific error vectors.
 - `run_whole_body_demo.m` provides a one-call entry point for regenerating the full pipeline (IK solve, synchronisation, plots, animation).
-
-## In Flight / Next Steps
-- Replace the chassis ramp shift with a planner (e.g., hybrid A*) that respects the chassis footprint and avoids large IK-driven corrections.
-- Convert ramp and tracking IK to generalized inverse kinematics with collision avoidance against the chassis + column mesh so the arm stays within limits.
-- Investigate and reduce the remaining ~0.15 m tracking error spikes by tuning the refined base path and addressing joint-limit-induced clamping.
-
-## 2025-09-24
 - Wired generalized IK across ramp, refinement, and tracking stages; ramp warm-up now uses the solved joint profiles and enforces chassis/column clearance via the shared STL collision mesh.
 - Replaced the ad-hoc ramp planner with the Hybrid A* helper so the base drives from the fixed home pose (−2, −2, 0) to the first waypoint while preserving heading continuity.
 - Added virtual EE ramp targets (matching first waypoint orientation/height) and logged the configuration in ramp metadata for downstream analysis.
-- Next: shake out solver tolerances with `matlab -batch "run_camera_motion_tests"`, tune collision/velocity limits, and trim any residual tracking spikes before porting the setup into ROS.
+- Introduced a collision-aware warm-up phase using generalized IK, stored the IK candidates in `rampInfo`, and generated a 20-sample quintic joint trajectory (0.1 s spacing) so the arm enters tracking smoothly with known velocities/accelerations.
+- Defaulted the MATLAB demo driver to `use_gik = true`, refreshed the documentation, and created `run_arm_ramp_inspection.m` plus inspection plots/MP4s for the warm-up stage.
+- Hardened `helpers.animate_whole_body` by removing stale visuals and disabling `FastUpdate`, eliminating the frozen-arm artifact and producing consistent ramp/track animations.
+- Seeded the tracking synchronizer with the ramp’s final heading and caged per-step yaw updates so direction reversals no longer cause single-frame spins; regenerated the full animation to verify smooth motion through the 160–270 frame region.
+- Verified the ramp→tracking handoff keeps the gripper height continuous (0.86 m) and that the 5–6 cm planar offset persists as the main residual to address.
 
-## 2025-09-24 (later)
-- Generated a ramp overview plot/fig that shows the robot at the fixed home pose, chassis/column mesh, EE home pose, ramp goal, and first desired waypoint using `plot_ramp_overview`.
-- Scaled the chassis STL to meters and saved both PNG and FIG artefacts (`ramp_overview_file.{png,fig}`) for inspection.
-- Highlighted the need to adjust ramp alignment: with the chassis fixed at (-2,-2,0), the EE home pose and ramp goal expose the gap the base ramp must close before tracking.
-
-## 2025-09-27
-- Added a collision-aware ramp solver: seed generalized IK with joint bounds, chassis/column environment meshes, and self-collision to find the warm-up configuration closest to the home pose. The FK-derived EE goal, joint solution, and constraint metadata now live in `rampInfo`.
-- Smoothed the arm warm-up by generating a 20-sample quintic joint trajectory (0.1 s spacing) and capturing the velocities/accelerations for reuse during ramp playback.
-- Defaulted the MATLAB demo driver to `use_gik = true` so the full trajectory solve can honor the same collision settings; the documentation now calls out the GIK-based flow.
-- Note: running the demo on the current MATLAB build still triggers joint-limit warnings and reports ~0.2 m tracking spikes—these stem from the source trajectory rather than the new ramp logic and remain on the follow-up list.
-- Hardened the animation helper by removing stale robot visuals and disabling `FastUpdate` so each frame reflects the current ramp joints; rerendered inspection videos have no frozen poses.
-- Added `run_arm_ramp_inspection.m` to regenerate ramp-only plots (joint angles/velocities, EE axes) and a slow-motion MP4 with the base locked in place via `matlab -batch "run_arm_ramp_inspection"`.
-- Refreshed the collision mesh loader to accept struct/name-value options and degrade gracefully if the STL is missing; re-exported ramp inspection assets (`arm_ramp_inspection_*`).
+## Future To-Dos
+- Bias the chassis ramp end pose or allow a short arm correction so the warm-up EE pose matches the first desired waypoint, removing the ~6 cm XY jump at the tracking handoff.
+- Reduce the tracking-phase IK warnings by tuning joint limits, collision constraints, or trajectory smoothing once collision avoidance primitives are available in this MATLAB install.
+- Capture chassis-ramp-only diagnostics similar to the arm inspection so that future tweaks to the yaw-rate limiter and path planner can be measured quickly.
