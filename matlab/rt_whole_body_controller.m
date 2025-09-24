@@ -116,6 +116,14 @@ homeBasePose = compute_home_base_pose();
 rampBaseSpeedMax = 0.2;
 trackingBaseSpeedMax = 0.6;
 
+collisionAvoidanceDefault = configure_arm_collision_avoidance(robot, thisDir);
+if ~isfield(gikOptions, 'CollisionAvoidance') || isempty(gikOptions.CollisionAvoidance)
+    gikOptions.CollisionAvoidance = collisionAvoidanceDefault;
+else
+    gikOptions.CollisionAvoidance = normalize_collision_avoidance_entries(gikOptions.CollisionAvoidance);
+end
+rampCollisionDefs = gikOptions.CollisionAvoidance;
+
 if useGeneralizedIK
     if isempty(gikOptions.DistanceConstraints)
         defaultDist = struct('EndEffector', eeName, ...
@@ -133,25 +141,6 @@ if useGeneralizedIK
         gikOptions.CartesianBounds = {defaultCart};
     end
 
-    if isempty(gikOptions.CollisionAvoidance)
-        chassisMeshPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'meshes', 'cr_no_V.stl');
-        if exist(chassisMeshPath, 'file') == 2
-            try
-                chassisMesh = helpers.load_collision_mesh(chassisMeshPath);
-                collisionStruct = struct('Environment', {{chassisMesh}}, ...
-                                         'SelfCollisions', false, ...
-                                         'Weights', 1.0, ...
-                                         'NumSamples', 6);
-                gikOptions.CollisionAvoidance = {collisionStruct};
-            catch ME
-                warning('rt_whole_body_controller:CollisionMeshLoad', ...
-                    'Failed to load collision mesh %s (%s). Continuing without collision avoidance.', chassisMeshPath, ME.message);
-            end
-        else
-            warning('rt_whole_body_controller:CollisionMeshMissing', ...
-                'Collision mesh %s not found. Continuing without collision avoidance.', chassisMeshPath);
-        end
-    end
 end
 
 %% Load reference trajectory (camera/world space)
@@ -207,7 +196,7 @@ else
 end
 
 [baseWaypointsAug, thetaRefAug, rawBaseWaypointsAug, refPositionsAug, refRPYAug, refTimesAug, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, robot, armJointNames, homeEEPosition, homeEERPY, homeBasePose, rampBaseSpeedMax, thetaRefNominal(1));
+    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, robot, armJointNames, homeEEPosition, homeEERPY, homeBasePose, rampBaseSpeedMax, thetaRefNominal(1), rampCollisionDefs);
 
 baseWaypointsNominalFull = baseWaypointsAug;
 rawBaseWaypointsFull = rawBaseWaypointsAug;
@@ -722,7 +711,7 @@ end
 end
 
 function [baseWaypointsOut, thetaRefOut, rawBaseWaypointsOut, refPositionsOut, refRPYOut, refTimesOut, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, robot, armJointNames, homeEEPos, homeEERPY, homeBasePose, rampBaseSpeedMax, desiredYawTarget)
+    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, robot, armJointNames, homeEEPos, homeEERPY, homeBasePose, rampBaseSpeedMax, desiredYawTarget, collisionAvoidanceDefs)
 
 if nargin < 10 || isempty(robot)
     error('prepend_ramp_segment requires robot model input.');
@@ -741,6 +730,9 @@ if nargin < 14 || isempty(rampBaseSpeedMax)
 end
 if nargin < 15 || isempty(desiredYawTarget)
     desiredYawTarget = thetaRefIn(1);
+end
+if nargin < 16 || isempty(collisionAvoidanceDefs)
+    collisionAvoidanceDefs = {};
 end
 
 homePose = homeBasePose(:)';
@@ -791,8 +783,21 @@ orientTarget = constraintOrientationTarget(eeNameLocal);
 orientTarget.ReferenceBody = robot.BaseName;
 orientTarget.TargetOrientation = eul2quat(desiredRPY, 'XYZ');
 
+jointBoundsConstraint = constraintJointBounds(robot);
+[collisionConstraints, collisionInputs] = instantiate_collision_avoidance(robot, collisionAvoidanceDefs);
+
+constraintObjects = {cartBound, orientTarget, jointBoundsConstraint};
+constraintInputs = {'cartesian','orientation','jointbounds'};
+if ~isempty(collisionConstraints)
+    constraintObjects = [constraintObjects, collisionConstraints]; %#ok<AGROW>
+    constraintInputs = [constraintInputs, collisionInputs]; %#ok<AGROW>
+end
+
+gikSolver = generalizedInverseKinematics('RigidBodyTree', robot, ...
+    'ConstraintInputs', constraintInputs);
+
 [seedConfigs, seedLabels, seedJointVectors] = build_arm_ramp_seed_set(configHome, armIdxLocal, qStart, robot, armJointNames);
-[configGoal, qEnd, candidateSolutions, selectedSeedIdx] = solve_arm_ramp_gik(gikSolver, cartBound, orientTarget, seedConfigs, armIdxLocal, qStart);
+[configGoal, qEnd, candidateSolutions, selectedSeedIdx] = solve_arm_ramp_gik(gikSolver, constraintObjects, seedConfigs, armIdxLocal, qStart);
 
 TeeGoal = getTransform(robot, configGoal, eeNameLocal);
 virtualPos = TeeGoal(1:3,4)';
@@ -828,7 +833,8 @@ rampInfo = struct('enabled', false, 'duration', 0, 'steps', 0, ...
     'virtualEEPose', armGoal, 'baseSpeedLimit', rampBaseSpeedMax, ...
     'armGoalCandidates', candidateSolutions, 'armSeedLabels', {seedLabels}, ...
     'armSelectedSeed', selectedSeedIdx, 'armSeedVectors', seedJointVectors, ...
-    'armJointVelocity', [], 'armJointAcceleration', [], 'armSamplePeriod', armSamplePeriod);
+    'armJointVelocity', [], 'armJointAcceleration', [], 'armSamplePeriod', armSamplePeriod, ...
+    'collisionAvoidance', {collisionAvoidanceDefs});
 
 if posError < 1e-4 && yawError < deg2rad(0.5)
     baseWaypointsOut = baseWaypointsIn;
@@ -1366,7 +1372,7 @@ for idx = 1:numel(armIdxLocal)
 end
 end
 
-function [configBest, qBest, qCandidates, seedSelection] = solve_arm_ramp_gik(gikSolver, cartBound, orientTarget, seedConfigs, armIdxLocal, qStart)
+function [configBest, qBest, qCandidates, seedSelection] = solve_arm_ramp_gik(gikSolver, constraintObjects, seedConfigs, armIdxLocal, qStart)
 %SOLVE_ARM_RAMP_GIK Evaluate IK across seeds and pick the closest to qStart.
 configs = cell(0, 1);
 qCandidates = zeros(0, numel(armIdxLocal));
@@ -1374,7 +1380,7 @@ seedIndices = zeros(0, 1);
 
 for sIdx = 1:numel(seedConfigs)
     try
-        solStruct = gikSolver(seedConfigs{sIdx}, cartBound, orientTarget);
+        solStruct = gikSolver(seedConfigs{sIdx}, constraintObjects{:});
     catch
         continue;
     end
@@ -1419,4 +1425,144 @@ end
 configBest = configs{bestIdx};
 qBest = qCandidates(bestIdx, :);
 seedSelection = seedIndices(bestIdx);
+end
+
+function collisionEntries = configure_arm_collision_avoidance(~, thisDir)
+%CONFIGURE_ARM_COLLISION_AVOIDANCE Build default collision-avoidance entries.
+collisionEntries = {};
+
+if exist('constraintCollisionAvoidance', 'class') ~= 8 && exist('constraintCollisionAvoidance', 'file') ~= 2
+    warning('rt_whole_body_controller:CollisionConstraintUnavailable', ...
+        'constraintCollisionAvoidance is unavailable; skipping collision avoidance.');
+    return;
+end
+
+envObjects = {};
+chassisMeshPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'meshes', 'cr_no_V.stl');
+if exist(chassisMeshPath, 'file') == 2
+    try
+        chassisMesh = helpers.load_collision_mesh(chassisMeshPath, struct('Scale', 1e-3));
+        envObjects{end+1} = chassisMesh; %#ok<AGROW>
+    catch ME
+        warning('rt_whole_body_controller:CollisionMeshLoad', ...
+            'Failed to load collision mesh %s (%s). Continuing with self-collision only.', chassisMeshPath, ME.message);
+    end
+else
+    warning('rt_whole_body_controller:CollisionMeshMissing', ...
+        'Collision mesh %s not found. Continuing with self-collision only.', chassisMeshPath);
+end
+
+collisionEntry = struct();
+collisionEntry.Environment = envObjects;
+collisionEntry.SelfCollisions = true;
+collisionEntry.NumSamples = 8;
+collisionEntry.Weights = 1.0;
+
+collisionEntries = {collisionEntry};
+end
+
+function entriesOut = normalize_collision_avoidance_entries(entriesIn)
+%NORMALIZE_COLLISION_AVOIDANCE_ENTRIES Ensure collision config has required fields.
+if exist('constraintCollisionAvoidance', 'class') ~= 8 && exist('constraintCollisionAvoidance', 'file') ~= 2
+    if ~isempty(entriesIn)
+        warning('rt_whole_body_controller:CollisionConstraintUnavailable', ...
+            'constraintCollisionAvoidance is unavailable; ignoring CollisionAvoidance options.');
+    end
+    entriesOut = {};
+    return;
+end
+
+if isempty(entriesIn)
+    entriesOut = {};
+    return;
+end
+
+if ~iscell(entriesIn)
+    entriesIn = {entriesIn};
+end
+
+entriesOut = entriesIn;
+for idx = 1:numel(entriesIn)
+    entry = entriesIn{idx};
+    if isa(entry, 'constraintCollisionAvoidance')
+        entry.SelfCollisions = true;
+        if isempty(entry.Environment)
+            entry.Environment = {};
+        end
+        entriesOut{idx} = entry;
+    elseif isstruct(entry)
+        if ~isfield(entry, 'Environment') || isempty(entry.Environment)
+            entry.Environment = {};
+        end
+        if ~isfield(entry, 'SelfCollisions') || isempty(entry.SelfCollisions)
+            entry.SelfCollisions = true;
+        else
+            entry.SelfCollisions = logical(entry.SelfCollisions);
+        end
+        if ~isfield(entry, 'NumSamples') || isempty(entry.NumSamples)
+            entry.NumSamples = 8;
+        end
+        if ~isfield(entry, 'Weights') || isempty(entry.Weights)
+            entry.Weights = 1.0;
+        end
+        if ~isfield(entry, 'CollisionPairs')
+            entry.CollisionPairs = {};
+        end
+        entriesOut{idx} = entry;
+    else
+        error('rt_whole_body_controller:InvalidCollisionEntry', ...
+            'Unsupported CollisionAvoidance entry of type %s.', class(entry));
+    end
+end
+end
+
+function [constraints, inputNames] = instantiate_collision_avoidance(robot, entries)
+%INSTANTIATE_COLLISION_AVOIDANCE Convert configuration entries to constraints.
+constraints = {};
+inputNames = {};
+
+if exist('constraintCollisionAvoidance', 'class') ~= 8 && exist('constraintCollisionAvoidance', 'file') ~= 2
+    return;
+end
+
+if nargin < 2 || isempty(entries)
+    return;
+end
+
+if ~iscell(entries)
+    entries = {entries};
+end
+
+for idx = 1:numel(entries)
+    entry = entries{idx};
+    if isa(entry, 'constraintCollisionAvoidance')
+        collObj = entry;
+        collObj.SelfCollisions = true;
+    elseif isstruct(entry)
+        collObj = constraintCollisionAvoidance(robot);
+        if isfield(entry, 'Environment') && ~isempty(entry.Environment)
+            collObj.Environment = entry.Environment;
+        end
+        if isfield(entry, 'CollisionPairs') && ~isempty(entry.CollisionPairs)
+            collObj.CollisionPairs = entry.CollisionPairs;
+        end
+        if isfield(entry, 'Weights') && ~isempty(entry.Weights)
+            collObj.Weights = entry.Weights;
+        end
+        if isfield(entry, 'NumSamples') && ~isempty(entry.NumSamples)
+            collObj.NumSamples = entry.NumSamples;
+        end
+        if isfield(entry, 'SelfCollisions') && ~isempty(entry.SelfCollisions)
+            collObj.SelfCollisions = logical(entry.SelfCollisions);
+        else
+            collObj.SelfCollisions = true;
+        end
+    else
+        error('rt_whole_body_controller:InvalidCollisionEntry', ...
+            'Unsupported CollisionAvoidance entry of type %s.', class(entry));
+    end
+
+    constraints{end+1} = collObj; %#ok<AGROW>
+    inputNames{end+1} = 'collisionavoidance'; %#ok<AGROW>
+end
 end

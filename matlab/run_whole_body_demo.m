@@ -14,6 +14,9 @@ traj_file = '1_pull_world.json';
 traj_duration = 12;              % seconds to retime over
 traj_scale = 1.0;
 
+% Prefer constraint-based IK so collision avoidance is active
+use_gik = true;
+
 % Animation / visualization controls ------------------------------------------
 enable_animation = true;
 animation_video_file = '1_pull_world_animation_new.mp4';

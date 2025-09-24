@@ -26,7 +26,8 @@ Tune `limits` and tracker gains in MATLAB and port the validated values back int
 ## Robotics System Toolbox Workflow
 - `rt_whole_body_controller.m` — end-to-end example that leverages Robotics System Toolbox:
   - Imports the URDF into a `rigidBodyTree` via `importrobot`.
-  - Uses `inverseKinematics` to realize arm joint trajectories from camera pose waypoints.
+  - Uses `inverseKinematics` to realize arm joint trajectories from camera pose waypoints when `use_gik` is disabled.
+  - Uses `generalizedInverseKinematics` with chassis/column environment meshes and self-collision enabled when `use_gik` is true (default in `run_whole_body_demo.m`).
   - Simulates base motion with `controllerPurePursuit` and `differentialDriveKinematics` (built-in diff-drive tracker).
   - Produces command histories you can map directly into ROS trajectories.
 - `rt_compute_arm_ik.m` — helper that wraps repeated IK calls and returns joint arrays aligned with the robot’s joint list.
