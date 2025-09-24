@@ -2,7 +2,8 @@ function path = hybrid_astar_plan(startPose, goalPose, opts)
 %HYBRID_ASTAR_PLAN Plan a SE(2) path using a minimal Hybrid A* search.
 %   path = helpers.hybrid_astar_plan(startPose, goalPose, opts)
 %   startPose, goalPose: [x y yaw]. opts (optional struct) can contain: 
-%       StepSize, Wheelbase, MaxSteer, GoalPosTol, GoalYawTol, MaxIterations.
+%       StepSize, Wheelbase, MaxSteer, GoalPosTol, GoalYawTol, MaxIterations,
+%       Obstacles, FootprintRadius.
 
 if nargin < 3
     opts = struct();
@@ -14,6 +15,8 @@ maxSteer = getOpt(opts, 'MaxSteer', deg2rad(30));
 goalTolXY = getOpt(opts, 'GoalPosTol', 0.02);
 goalTolYaw = getOpt(opts, 'GoalYawTol', deg2rad(5));
 maxIter = getOpt(opts, 'MaxIterations', 5000);
+footprintRadius = max(getOpt(opts, 'FootprintRadius', 0.35), 0.01);
+obstacles = getOpt(opts, 'Obstacles', []);
 
 steerSet = [-maxSteer, 0, maxSteer];
 directions = [1, -1];
@@ -23,6 +26,12 @@ fCost = heuristic(startPose, goalPose);
 openIdx = 1;
 closedSet = containers.Map('KeyType','char','ValueType','double');
 nodeCount = 1;
+
+if isColliding(startPose, footprintRadius, obstacles) || ...
+        isColliding(goalPose, footprintRadius, obstacles)
+    path = [];
+    return;
+end
 
 for iter = 1:maxIter
     if isempty(openIdx)
@@ -48,6 +57,9 @@ for iter = 1:maxIter
         for steer = steerSet
             [nextPose, cost] = propagate(current.pose, dir, steer, step, wb);
             if isempty(nextPose)
+                continue;
+            end
+            if isColliding(nextPose, footprintRadius, obstacles)
                 continue;
             end
             nextKey = nodeKey(nextPose);
@@ -96,6 +108,38 @@ path = [];
 
     function tf = reachedGoal(pose, goal, tolXY, tolYaw)
         tf = hypot(goal(1) - pose(1), goal(2) - pose(2)) <= tolXY && abs(wrapToPi(goal(3) - pose(3))) <= tolYaw;
+    end
+
+    function tf = isColliding(pose, radius, obsList)
+        if isempty(obsList)
+            tf = false;
+            return;
+        end
+        tf = false;
+        for obsIdx = 1:numel(obsList)
+            obs = obsList(obsIdx);
+            if isfield(obs, 'type')
+                type = obs.type;
+            else
+                type = 'circle';
+            end
+            switch lower(type)
+                case {'circle','disc','disk'}
+                    center = obs.center;
+                    rad = obs.radius;
+                    tf = hypot(pose(1) - center(1), pose(2) - center(2)) <= (rad + radius);
+                case {'rectangle','box','aabb'}
+                    bounds = obs.bounds; % [xmin xmax ymin ymax]
+                    inflate = radius;
+                    tf = pose(1) >= (bounds(1) - inflate) && pose(1) <= (bounds(2) + inflate) && ...
+                         pose(2) >= (bounds(3) - inflate) && pose(2) <= (bounds(4) + inflate);
+                otherwise
+                    tf = false;
+            end
+            if tf
+                return;
+            end
+        end
     end
 
     function [poseOut, cost] = propagate(poseIn, dir, steer, ds, wbVal)

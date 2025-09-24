@@ -844,7 +844,7 @@ rampInfo = struct('enabled', false, 'duration', 0, 'steps', 0, ...
     'armGoalCandidates', candidateSolutions, 'armSeedLabels', {seedLabels}, ...
     'armSelectedSeed', selectedSeedIdx, 'armSeedVectors', seedJointVectors, ...
     'armJointVelocity', [], 'armJointAcceleration', [], 'armSamplePeriod', armSamplePeriod, ...
-    'collisionAvoidance', {collisionAvoidanceDefs});
+    'collisionAvoidance', {collisionAvoidanceDefs}, 'obstacles', []);
 
 if posError < 1e-4 && yawError < deg2rad(0.5)
     baseWaypointsOut = baseWaypointsIn;
@@ -869,6 +869,22 @@ rampInfo.armGoalConfig = qEnd;
 
 plannerOpts = struct('StepSize', 0.05, 'Wheelbase', 0.5, 'MaxSteer', deg2rad(30), ...
     'GoalPosTol', 0.01, 'GoalYawTol', deg2rad(5), 'MaxIterations', 5000);
+
+obstacles = [];
+if exist('chassis_obstacles', 'file') == 2
+    try
+        obstacles = chassis_obstacles();
+    catch ME
+        warning('prepend_ramp_segment:ObstacleConfig', ...
+            'Failed to load chassis obstacles (%s). Continuing without obstacles.', ME.message);
+        obstacles = [];
+    end
+end
+if ~isempty(obstacles)
+    plannerOpts.Obstacles = obstacles;
+    plannerOpts.FootprintRadius = 0.4;
+    rampInfo.obstacles = obstacles;
+end
 path = helpers.hybrid_astar_plan(homePose, targetPose, plannerOpts);
 if isempty(path)
     path = [homePose; targetPose];
