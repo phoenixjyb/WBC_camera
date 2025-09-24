@@ -20,6 +20,8 @@ maxIter = getOpt(opts, 'MaxIterations', 5000);
 footprintRadius = max(getOpt(opts, 'FootprintRadius', 0.35), 0.01);
 obstacles = getOpt(opts, 'Obstacles', []);
 disableToolbox = getOpt(opts, 'DisableToolbox', false);
+speedLimit = getOpt(opts, 'SpeedLimit', 0.2);
+maxYawRate = getOpt(opts, 'MaxYawRate', Inf);
 
 infoToolbox = struct('success', false, 'status', "toolbox_not_attempted", ...
     'reason', "", 'pathLength', 0);
@@ -27,7 +29,7 @@ path = [];
 
 if ~disableToolbox
     [pathTool, infoToolbox] = tryPlannerHybridAStar(startPose, goalPose, ...
-        footprintRadius, obstacles, step, wb, maxSteer, opts);
+        footprintRadius, obstacles, step, wb, maxSteer, speedLimit, maxYawRate, opts);
     if infoToolbox.success
         path = pathTool;
         if nargout > 1
@@ -43,6 +45,8 @@ path = pathFallback;
 
 if nargout > 1
     info = infoSearch;
+    info.speedLimit = speedLimit;
+    info.maxYawRate = maxYawRate;
     info.toolboxAttempt = infoToolbox;
 end
 
@@ -50,7 +54,7 @@ end
 
 %% ------------------------------------------------------------------------
 function [pathOut, info] = tryPlannerHybridAStar(startPose, goalPose, ...
-    footprintRadius, obstacles, step, wb, maxSteer, opts)
+    footprintRadius, obstacles, step, wb, maxSteer, speedLimit, maxYawRate, opts)
 
 info = struct('success', false, 'status', "toolbox_unavailable", ...
     'reason', "no_planner", 'pathLength', 0);
@@ -83,6 +87,21 @@ try
 
     planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, ...
         'MotionPrimitiveLength', primitiveLength);
+    numMP = getOpt(opts, 'NumMotionPrimitives', planner.NumMotionPrimitives);
+    if mod(numMP,2) == 0
+        numMP = numMP + 1;
+    end
+    planner.NumMotionPrimitives = max(3, numMP);
+    planner.AnalyticExpansionInterval = getOpt(opts, 'AnalyticExpansionInterval', planner.AnalyticExpansionInterval);
+
+    targetSpacing = max(step, res);
+    if isfinite(maxYawRate) && maxYawRate > 0 && isfinite(speedLimit) && speedLimit > 0
+        yawSpacing = speedLimit / maxYawRate;
+        if yawSpacing > 0
+            targetSpacing = min(targetSpacing, yawSpacing);
+        end
+    end
+    planner.InterpolationDistance = max(targetSpacing, res);
 
     if any(checkOccupancy(map, startPose(1:2))) || any(checkOccupancy(map, goalPose(1:2)))
         info.status = "toolbox_start_or_goal_blocked";
@@ -106,11 +125,29 @@ try
         pathOut = [];
         return;
     end
+    if size(states,1) >= 2
+        segDist = sqrt(sum(diff(states(:,1:2)).^2, 2));
+        pathDistance = sum(segDist);
+        desiredSpacing = max(targetSpacing, 1e-3);
+        desiredStates = max(size(states,1), ceil(pathDistance / desiredSpacing) + 1);
+        if desiredStates > size(states,1)
+            interpolate(refPath, desiredStates);
+            states = refPath.States;
+        end
+        info.pathDistance = pathDistance;
+        info.desiredSpacing = desiredSpacing;
+    else
+        info.pathDistance = 0;
+        info.desiredSpacing = targetSpacing;
+    end
+    states(:,3) = wrapToPi(states(:,3));
     pathOut = states;
     info.success = true;
     info.status = "toolbox";
     info.reason = "plannerHybridAStar";
     info.pathLength = size(pathOut, 1);
+    info.targetSpacing = targetSpacing;
+    info.numMotionPrimitives = planner.NumMotionPrimitives;
 catch ME
     info.status = "toolbox_exception";
     info.reason = ME.identifier;

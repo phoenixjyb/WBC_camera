@@ -114,7 +114,9 @@ homeEERPY = rotm2eul(TeeHome(1:3,1:3), 'XYZ');
 
 homeBasePose = compute_home_base_pose();
 rampBaseSpeedMax = 0.2;
+rampBaseYawRateMax = 0.5; % rad/s yaw limit during chassis warm-up
 trackingBaseSpeedMax = 0.6;
+trackingBaseYawRateMax = 0.5; % rad/s yaw limit during tracking phase
 
 collisionAvoidanceDefault = configure_arm_collision_avoidance(robot, thisDir);
 if ~isfield(gikOptions, 'CollisionAvoidance') || isempty(gikOptions.CollisionAvoidance)
@@ -196,15 +198,15 @@ else
 end
 
 [baseWaypointsAug, thetaRefAug, rawBaseWaypointsAug, refPositionsAug, refRPYAug, refTimesAug, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, robot, armJointNames, homeEEPosition, homeEERPY, homeBasePose, rampBaseSpeedMax, thetaRefNominal(1), rampCollisionDefs);
+    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, robot, armJointNames, homeEEPosition, homeEERPY, homeBasePose, rampBaseSpeedMax, rampBaseYawRateMax, thetaRefNominal(1), rampCollisionDefs);
 
 baseWaypointsNominalFull = baseWaypointsAug;
 rawBaseWaypointsFull = rawBaseWaypointsAug;
 thetaRefAugOriginal = thetaRefAug;
 [thetaRefGeom, ~, ~] = compute_base_heading(baseWaypointsAug);
 thetaRefAug = thetaRefGeom;
-if rampInfo.armSteps > 0
-    thetaRefAug(1:rampInfo.armSteps) = thetaRefAugOriginal(1:rampInfo.armSteps);
+if rampInfo.steps > 0
+    thetaRefAug(1:rampInfo.steps) = thetaRefAugOriginal(1:rampInfo.steps);
 end
 thetaRefNominalFull = thetaRefAug;
 
@@ -308,7 +310,7 @@ armTrajectoryTrack = armTrajectoryTimedTrack;
 armTrajectoryInitial = armTrajectoryTrack;
 
 %% Synchronize chassis motion with retimed tracking trajectory
-baseLimits = struct('v_max', trackingBaseSpeedMax, 'omega_max', 1.0, 'lat_acc_max', 0.6);
+baseLimits = struct('v_max', trackingBaseSpeedMax, 'omega_max', trackingBaseYawRateMax, 'lat_acc_max', 0.6);
 maxCurvature = estimate_max_curvature(segmentDist, thetaGeomRef);
 if maxCurvature < 1e-6
     baseSpeedLimit = baseLimits.v_max;
@@ -727,7 +729,7 @@ end
 end
 
 function [baseWaypointsOut, thetaRefOut, rawBaseWaypointsOut, refPositionsOut, refRPYOut, refTimesOut, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, robot, armJointNames, homeEEPos, homeEERPY, homeBasePose, rampBaseSpeedMax, desiredYawTarget, collisionAvoidanceDefs)
+    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, robot, armJointNames, homeEEPos, homeEERPY, homeBasePose, rampBaseSpeedMax, rampBaseYawRateMax, desiredYawTarget, collisionAvoidanceDefs)
 
 if nargin < 10 || isempty(robot)
     error('prepend_ramp_segment requires robot model input.');
@@ -744,10 +746,13 @@ end
 if nargin < 14 || isempty(rampBaseSpeedMax)
     rampBaseSpeedMax = 0.2;
 end
-if nargin < 15 || isempty(desiredYawTarget)
+if nargin < 15 || isempty(rampBaseYawRateMax)
+    rampBaseYawRateMax = 0.5;
+end
+if nargin < 16 || isempty(desiredYawTarget)
     desiredYawTarget = thetaRefIn(1);
 end
-if nargin < 16 || isempty(collisionAvoidanceDefs)
+if nargin < 17 || isempty(collisionAvoidanceDefs)
     collisionAvoidanceDefs = {};
 end
 
@@ -847,10 +852,11 @@ rampInfo = struct('enabled', false, 'duration', 0, 'steps', 0, ...
     'eeStart', homeEEPos, 'eeGoal', virtualPos, ...
     'baseStart', homePose(1:2), 'baseGoal', targetPose(1:2), ...
     'virtualEEPose', armGoal, 'baseSpeedLimit', rampBaseSpeedMax, ...
+    'baseYawRateLimit', rampBaseYawRateMax, ...
     'armGoalCandidates', candidateSolutions, 'armSeedLabels', {seedLabels}, ...
     'armSelectedSeed', selectedSeedIdx, 'armSeedVectors', seedJointVectors, ...
     'armJointVelocity', [], 'armJointAcceleration', [], 'armSamplePeriod', armSamplePeriod, ...
-    'collisionAvoidance', {collisionAvoidanceDefs}, 'obstacles', []);
+    'collisionAvoidance', {collisionAvoidanceDefs}, 'obstacles', [], 'planInfo', struct());
 
 if posError < 1e-4 && yawError < deg2rad(0.5)
     baseWaypointsOut = baseWaypointsIn;
@@ -864,6 +870,11 @@ end
 
 basePhaseDuration = max(1.5, max(posError / 0.25, yawError / deg2rad(45)));
 basePhaseStepsMin = max(ceil(basePhaseDuration / max(sampleDt, 1e-3)), 20);
+if isfinite(rampBaseYawRateMax) && rampBaseYawRateMax > 0
+    yawSpan = abs(wrapToPi(targetPose(3) - homePose(3)));
+    yawSamplesMin = ceil((yawSpan / max(rampBaseYawRateMax, 1e-6)) / max(sampleDt, 1e-3));
+    basePhaseStepsMin = max(basePhaseStepsMin, yawSamplesMin);
+end
 
 rampInfo.enabled = true;
 rampInfo.armSteps = armPhaseSteps;
@@ -874,7 +885,8 @@ rampInfo.armTimeVector = timeSamples(:);
 rampInfo.armGoalConfig = qEnd;
 
 plannerOpts = struct('StepSize', 0.05, 'Wheelbase', 0.5, 'MaxSteer', deg2rad(30), ...
-    'GoalPosTol', 0.01, 'GoalYawTol', deg2rad(5), 'MaxIterations', 5000);
+    'GoalPosTol', 0.01, 'GoalYawTol', deg2rad(5), 'MaxIterations', 5000, ...
+    'SpeedLimit', rampBaseSpeedMax, 'MaxYawRate', rampBaseYawRateMax);
 
 obstacles = [];
 if exist('chassis_obstacles', 'file') == 2
@@ -891,13 +903,16 @@ if ~isempty(obstacles)
     plannerOpts.FootprintRadius = 0.4;
     rampInfo.obstacles = obstacles;
 end
-path = helpers.hybrid_astar_plan(homePose, targetPose, plannerOpts);
+[path, plannerInfo] = helpers.hybrid_astar_plan(homePose, targetPose, plannerOpts);
 if isempty(path)
     path = [homePose; targetPose];
 end
 path(1,:) = homePose;
 path(end,:) = targetPose;
 rampInfo.plannedPath = path;
+if exist('plannerInfo', 'var') && ~isempty(plannerInfo)
+    rampInfo.planInfo = plannerInfo;
+end
 
 if size(path,1) == 1
     basePhaseSteps = max(basePhaseStepsMin, 0);
@@ -1253,8 +1268,17 @@ for iter = 1:maxIter
     retimeInfo.segmentTimes = retimeInfo.segmentTimes * limitFactor;
 end
 
-theta = wrapToPi(theta);
-omegaBase = gradient(unwrap(theta), armTimes);
+thetaUnwrapped = theta;
+for k = 2:numel(thetaUnwrapped)
+    dtStep = max(armTimes(k) - armTimes(k-1), 1e-6);
+    maxDelta = baseLimits.omega_max * dtStep;
+    delta = thetaUnwrapped(k) - thetaUnwrapped(k-1);
+    if abs(delta) > maxDelta
+        thetaUnwrapped(k) = thetaUnwrapped(k-1) + sign(delta) * maxDelta;
+    end
+end
+theta = wrapToPi(thetaUnwrapped);
+omegaBase = gradient(thetaUnwrapped, armTimes);
 if numel(omegaBase) > 1
     omegaBase([1 end]) = omegaBase([2 end-1]);
 end
