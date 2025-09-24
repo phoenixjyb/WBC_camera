@@ -14,6 +14,9 @@
 - Seeded the tracking synchronizer with the ramp’s final heading and caged per-step yaw updates so direction reversals no longer cause single-frame spins; regenerated the full animation to verify smooth motion through the 160–270 frame region.
 - Verified the ramp→tracking handoff keeps the gripper height continuous (0.86 m) and that the 5–6 cm planar offset persists as the main residual to address.
 - Extended the Hybrid A* planner with obstacle checks (disc/AABB primitives) and sourced obstacle definitions via `chassis_obstacles.m`, so the chassis ramp now routes around the 20 cm disc at (−1, −1).
+- Reworked the Hybrid A* wrapper to use MATLAB’s `plannerHybridAStar`, densify the polyline (≈5 cm spacing), and record planner diagnostics; regenerated ramp assets so the magenta path visibly arcs around the disc.
+- Clamped chassis yaw rate to 0.5 rad/s during both ramp and tracking phases, resampling heading updates in the synchronizer so the warm-up segment no longer produces 90° frame-to-frame spins.
+- Re-ran the full pipeline with the new limits, refreshed plots/MP4s, and confirmed the tracked base yaw never exceeds the cap while the arm ramp clip stays in sync with the planned chassis path.
 
 ## Future To-Dos
 - Bias the chassis ramp end pose or allow a short arm correction so the warm-up EE pose matches the first desired waypoint, removing the ~6 cm XY jump at the tracking handoff.

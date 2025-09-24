@@ -3,6 +3,16 @@ matlab/outputs/*.mp4
 matlab/outputs/*.png
 matlab/outputs/*.mat
 
+outputs/*.mp4
+outputs/*.png
+outputs/*.mat
+
 # macOS metadata
 .DS_Store
 matlab/.DS_Store
+
+# Generated frame images
+frames/
+
+# SolidWorks export folders
+cr_no_*
