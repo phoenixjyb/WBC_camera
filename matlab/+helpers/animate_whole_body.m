@@ -174,7 +174,8 @@ baseYawUnwrapped = interp1(baseTimes, unwrap(basePose(:,3)), armTimes, 'linear',
 baseYaw = wrapToPi(baseYawUnwrapped);
 
 % Prepare figure
-fig = figure('Name', 'Whole-Body Animation', 'Color', [0.15 0.15 0.15]);
+fig = figure('Name', 'Whole-Body Animation', 'Color', [0.15 0.15 0.15], ...
+    'Units', 'pixels', 'Position', [100 100 1120 840], 'Resize', 'off');
 ax = axes('Parent', fig, 'Color', [0.05 0.05 0.05], 'XColor', [0.9 0.9 0.9], ...
     'YColor', [0.9 0.9 0.9], 'ZColor', [0.9 0.9 0.9], 'GridColor', [0.35 0.35 0.35]);
 hold(ax, 'on'); grid(ax, 'on'); axis(ax, 'equal');
@@ -279,7 +280,11 @@ if ~isempty(options.Obstacles)
             case {'circle','disc','disk'}
                 center = obs.center;
                 radius = obs.radius;
-                h = max(getfield(obs, 'height', 0.05), 0);
+                if isfield(obs, 'height') && ~isempty(obs.height)
+                    h = max(obs.height, 0);
+                else
+                    h = 0.05;
+                end
                 thetaGrid = linspace(0, 2*pi, 40);
                 xCircle = center(1) + radius * cos(thetaGrid);
                 yCircle = center(2) + radius * sin(thetaGrid);

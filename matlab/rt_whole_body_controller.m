@@ -672,6 +672,12 @@ if animateRobot
     if strlength(videoFile) > 0
         args = [args, {'VideoFile', string(videoFile)}, {'VideoFrameRate', videoFrameRate}]; %#ok<AGROW>
     end
+    if isfield(rampInfo, 'obstacles') && ~isempty(rampInfo.obstacles)
+        args = [args, {'Obstacles', rampInfo.obstacles}]; %#ok<AGROW>
+    end
+    if isfield(rampInfo, 'plannedPath') && ~isempty(rampInfo.plannedPath)
+        args = [args, {'TargetPath', rampInfo.plannedPath}]; %#ok<AGROW>
+    end
     helpers.animate_whole_body(robot, armJointNames, armTrajectory, armTimes, ...
         poseHistory, tVec, desiredEEInterp, args{:}, ...
         'StageBoundaries', stageBoundaries, 'StageLabels', stageLabels);
@@ -891,6 +897,7 @@ if isempty(path)
 end
 path(1,:) = homePose;
 path(end,:) = targetPose;
+rampInfo.plannedPath = path;
 
 if size(path,1) == 1
     basePhaseSteps = max(basePhaseStepsMin, 0);
