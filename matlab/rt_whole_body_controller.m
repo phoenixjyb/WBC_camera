@@ -200,7 +200,12 @@ end
 
 baseWaypointsNominalFull = baseWaypointsAug;
 rawBaseWaypointsFull = rawBaseWaypointsAug;
-[thetaRefAug, ~, ~] = compute_base_heading(baseWaypointsAug);
+thetaRefAugOriginal = thetaRefAug;
+[thetaRefGeom, ~, ~] = compute_base_heading(baseWaypointsAug);
+thetaRefAug = thetaRefGeom;
+if rampInfo.armSteps > 0
+    thetaRefAug(1:rampInfo.armSteps) = thetaRefAugOriginal(1:rampInfo.armSteps);
+end
 thetaRefNominalFull = thetaRefAug;
 
 rampSamples = rampInfo.steps;

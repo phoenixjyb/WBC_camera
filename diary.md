@@ -21,3 +21,9 @@
 - Generated a ramp overview plot/fig that shows the robot at the fixed home pose, chassis/column mesh, EE home pose, ramp goal, and first desired waypoint using `plot_ramp_overview`.
 - Scaled the chassis STL to meters and saved both PNG and FIG artefacts (`ramp_overview_file.{png,fig}`) for inspection.
 - Highlighted the need to adjust ramp alignment: with the chassis fixed at (-2,-2,0), the EE home pose and ramp goal expose the gap the base ramp must close before tracking.
+
+## 2025-09-27
+- Added a collision-aware ramp solver: seed generalized IK with joint bounds, chassis/column environment meshes, and self-collision to find the warm-up configuration closest to the home pose. The FK-derived EE goal, joint solution, and constraint metadata now live in `rampInfo`.
+- Smoothed the arm warm-up by generating a 20-sample quintic joint trajectory (0.1 s spacing) and capturing the velocities/accelerations for reuse during ramp playback.
+- Defaulted the MATLAB demo driver to `use_gik = true` so the full trajectory solve can honor the same collision settings; the documentation now calls out the GIK-based flow.
+- Note: running the demo on the current MATLAB build still triggers joint-limit warnings and reports ~0.2 m tracking spikes—these stem from the source trajectory rather than the new ramp logic and remain on the follow-up list.

@@ -223,6 +223,7 @@ end
 % Animation loop
 hg = hgtransform('Parent', ax);
 chassisPatch = [];
+robotHandlesPrev = [];
 
 % Attempt to load chassis/support mesh once so it follows the base hgtransform
 meshPath = string(options.ChassisMesh);
@@ -263,13 +264,18 @@ if strlength(options.VideoFile) > 0
 end
 
 for k = 1:numSteps
+    if ~isempty(robotHandlesPrev)
+        delete(robotHandlesPrev(ishghandle(robotHandlesPrev)));
+        robotHandlesPrev = [];
+    end
+
     for j = 1:numel(armIdx)
         config(armIdx(j)).JointPosition = armTrajectory(k, j);
     end
     % Draw robot (positions shown relative to chassis frame with base pose)
     Tbase = trvec2tform([baseX(k), baseY(k), 0]) * axang2tform([0 0 1 baseYaw(k)]);
     show(robot, config, 'Parent', ax, 'PreservePlot', false, ...
-        'Frames', 'off', 'Visuals', 'on', 'FastUpdate', true);
+        'Frames', 'off', 'Visuals', 'on', 'FastUpdate', false);
 
     robotHandles = findall(ax, '-regexp', 'Tag', '^DO_NOT_EDIT');
     for h = reshape(robotHandles,1,[])
@@ -287,6 +293,7 @@ for k = 1:numSteps
         end
     end
     set(hg, 'Matrix', Tbase);
+    robotHandlesPrev = robotHandles;
 
     % Update markers
     set(baseMarker, 'XData', baseX(k), 'YData', baseY(k), 'ZData', 0);
