@@ -1,1 +1,0 @@
-controller_joint_names: ['', 'wheel_rf_joint', 'wheel_lf_joint', 'wheel_lr_joint', 'wheel_rr_joint', 'arm_seg1_rev', 'arm_seg2_rev', 'arm_seg3_rev', 'arm_seg4_rev', 'arm_seg5_rev', 'arm_seg6_rev', ]
