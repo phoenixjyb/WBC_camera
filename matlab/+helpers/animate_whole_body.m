@@ -46,6 +46,8 @@ arguments
     options.StageLabels (1,:) string = ["Ramp-up", "Tracking"]
     options.StageBoundaries double = []
     options.StageSelection string = "all"
+    options.Obstacles = []
+    options.TargetPath double = []
 end
 
 if options.VisualAlpha < 0 || options.VisualAlpha > 1
@@ -186,6 +188,10 @@ plot(ax, basePose(:,1), basePose(:,2), '--', 'Color', [0.85 0.7 0.1], 'LineWidth
 if ~isempty(eePoses) && size(eePoses,2) >= 3
     plot3(ax, eePoses(:,1), eePoses(:,2), eePoses(:,3), 'r-.', 'LineWidth', 1.0, 'DisplayName', 'Desired EE path');
 end
+if ~isempty(options.TargetPath)
+    tp = options.TargetPath;
+    plot(ax, tp(:,1), tp(:,2), 'm:', 'LineWidth', 1.4, 'DisplayName', 'Planned chassis path');
+end
 actualEE = nan(numSteps,3);
 actualLine = plot3(ax, nan, nan, nan, 'Color', [0 0.7 0.2], 'LineWidth', 1.5, 'DisplayName', 'Actual EE path');
 leg = legend(ax, 'Location', 'bestoutside');
@@ -260,6 +266,36 @@ if strlength(options.VideoFile) > 0
     catch ME
         warning('Failed to create video writer (%s). Continuing without video.', ME.message);
         videoWriter = [];
+    end
+end
+
+% Draw obstacles as translucent primitives
+if ~isempty(options.Obstacles)
+    obsList = options.Obstacles;
+    for obsIdx = 1:numel(obsList)
+        obs = obsList(obsIdx);
+        if ~isfield(obs, 'type'); obs.type = 'circle'; end
+        switch lower(obs.type)
+            case {'circle','disc','disk'}
+                center = obs.center;
+                radius = obs.radius;
+                h = max(getfield(obs, 'height', 0.05), 0);
+                thetaGrid = linspace(0, 2*pi, 40);
+                xCircle = center(1) + radius * cos(thetaGrid);
+                yCircle = center(2) + radius * sin(thetaGrid);
+                fill3(ax, xCircle, yCircle, zeros(size(thetaGrid)), 'c', 'FaceAlpha', 0.2, ...
+                    'EdgeColor', 'none', 'DisplayName', sprintf('Obstacle @ [%.1f %.1f]', center));
+                if h > 0
+                    fill3(ax, xCircle, yCircle, h * ones(size(thetaGrid)), 'c', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                end
+            case {'rectangle','box','aabb'}
+                bounds = obs.bounds;
+                xRect = [bounds(1) bounds(2) bounds(2) bounds(1) bounds(1)];
+                yRect = [bounds(3) bounds(3) bounds(4) bounds(4) bounds(3)];
+                fill3(ax, xRect, yRect, zeros(size(xRect)), 'c', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+            otherwise
+                % ignore unknown types
+        end
     end
 end
 
