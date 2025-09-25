@@ -52,6 +52,17 @@ for idx = 1:min(3, size(refRPYWorld,2))
     desiredRPYTrack(:, idx) = wrapToPi(interp1(timeParamRef, unwrap(refRPYWorld(:, idx)), timeParamTrack, 'pchip', 'extrap'));
 end
 
+if isempty(refTimes)
+    refTimesAligned = zeros(0,1);
+else
+    refTimesAligned = zeros(size(refTimes));
+    if numel(armTimesTrack) > 1
+        refTimesAligned = interp1(timeParamTrack, armTimesTrack, timeParamRef, 'pchip', 'extrap');
+    else
+        refTimesAligned(:) = armTimesTrack(1);
+    end
+end
+
 poseTformsFinal = zeros(4,4,numel(armTimesTrack));
 for k = 1:numel(armTimesTrack)
     Tbase = trvec2tform([baseXTrack(k), baseYTrack(k), 0]) * axang2tform([0 0 1 thetaTrack(k)]);
@@ -72,6 +83,7 @@ syncOut.thetaRefTimeline = thetaRefSyncTrack;
 syncOut.desiredEETrack = desiredEETrack;
 syncOut.desiredRPYTrack = desiredRPYTrack;
 syncOut.poseTformsFinal = poseTformsFinal;
+syncOut.refTimesAligned = refTimesAligned(:);
 end
 
 function [baseX, baseY, theta, vBase, omegaBase, scaleAccum, armTimes, armVel, retimeInfo, diagOut] = ...

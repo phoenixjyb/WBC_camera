@@ -57,6 +57,12 @@ if ~isfolder(outputDir)
 end
 
 useGeneralizedIK = logical(fetchOpt('use_gik', false));
+enableStreaming = logical(fetchOpt('enable_streaming', false));
+streamingHorizonTime = fetchOpt('streaming_horizon_time', 2.0);
+streamingStepTimeLocal = fetchOpt('streaming_step_time', []);
+streamingDebug = logical(fetchOpt('streaming_debug', false));
+streamingDumpDebug = logical(fetchOpt('streaming_dump_debug', false));
+streamingMode = string(fetchOpt('streaming_mode', "passthrough"));
 
 gikOptions = struct('PositionTolerance', 0.005, ...
                     'OrientationTolerance', deg2rad(3), ...
@@ -141,6 +147,11 @@ trajOpts = struct('source', char(trajSourceLocal), ...
                   'file', char(trajFileLocal), ...
                   'sample_dt', 0.1, ...
                   'max_speed', 3.0);
+if isempty(streamingStepTimeLocal)
+    streamingStepTime = trajOpts.sample_dt;
+else
+    streamingStepTime = streamingStepTimeLocal;
+end
 refData = wbc.prepare_reference_data(trajOpts);
 refPositionsWorld = refData.refPositionsWorld;
 refRPYWorld = refData.refRPYWorld;
@@ -233,27 +244,34 @@ if size(refRPYWorld,2) >= 3
 end
 poseTformsBase = wbc.build_base_to_ee_targets(baseWaypointsRef, thetaRef, refPositionsWorld, refRPYWorld);
 
-if useGeneralizedIK
-    seedConfigRef = homeConfiguration(robot);
-    for cfgIdx = 1:numel(seedConfigRef)
-        name = seedConfigRef(cfgIdx).JointName;
-        matchIdx = find(strcmp(jointNamesNominal, name), 1);
-        if ~isempty(matchIdx)
-            seedConfigRef(cfgIdx).JointPosition = armTrajectoryNominal(1, matchIdx);
-        end
+seedConfigRef = homeConfiguration(robot);
+for cfgIdx = 1:numel(seedConfigRef)
+    name = seedConfigRef(cfgIdx).JointName;
+    matchIdx = find(strcmp(jointNamesNominal, name), 1);
+    if ~isempty(matchIdx)
+        seedConfigRef(cfgIdx).JointPosition = armTrajectoryNominal(1, matchIdx);
     end
+end
+
+if useGeneralizedIK
     gikOptsRef = gikOptions;
     gikOptsRef.InitialGuess = seedConfigRef;
     [qMatrixRefined, jointNamesRefined, ikInfosRefined] = wbc.solve_arm_ik(robot, eeName, poseTformsBase, ...
         UseGeneralizedIK=true, GIKOptions=gikOptsRef);
 else
-    [qMatrixRefined, jointNamesRefined, ikInfosRefined] = wbc.solve_arm_ik(robot, eeName, poseTformsBase);
+    [qMatrixRefined, jointNamesRefined, ikInfosRefined] = wbc.solve_arm_ik(robot, eeName, poseTformsBase, ...
+        InitialGuess=seedConfigRef);
 end
 [foundJoints, armIdx] = ismember(armJointNames, jointNamesRefined);
 if any(~foundJoints)
     error('One or more arm joints missing from imported robot model after refinement.');
 end
 armTrajectoryRef = qMatrixRefined(:, armIdx);
+if enableStreaming && streamingDumpDebug
+    try %#ok<TRYNC>
+        save(fullfile(outputDir, 'streaming_debug_ref.mat'), 'armTrajectoryRef', 'armTrajectoryNominal', 'poseTformsBase');
+    end
+end
 
 %% Retiming with joint limits and synchronization (tracking segment only)
 armLimitCfg = arm_joint_limits();
@@ -272,8 +290,25 @@ if ~isempty(thetaRampNominal)
     thetaRampEnd = thetaRampNominal(end);
 end
 
-syncOut = wbc.sync_base_and_arm(baseWaypointsRef, thetaRef, arcLen, refTimes, refPositionsWorld, refRPYWorld, ...
-    armTrajectoryRef, baseLimits, baseSpeedLimit, thetaRampEnd);
+syncInputs = struct('baseWaypointsRef', baseWaypointsRef, ...
+    'thetaRef', thetaRef, 'arcLen', arcLen, 'refTimes', refTimes, ...
+    'refPositionsWorld', refPositionsWorld, 'refRPYWorld', refRPYWorld, ...
+    'armTrajectoryRef', armTrajectoryRef, 'baseLimits', baseLimits, ...
+    'baseSpeedLimit', baseSpeedLimit, 'thetaRampEnd', thetaRampEnd);
+streamArgsDiag = struct();
+if enableStreaming
+    streamArgs = struct('baseWaypointsRef', baseWaypointsRef, ...
+        'thetaRef', thetaRef, 'arcLen', arcLen, 'refTimes', refTimes, 'refPositionsWorld', refPositionsWorld, ...
+        'refRPYWorld', refRPYWorld, 'armTrajectoryRef', armTrajectoryRef, 'baseLimits', baseLimits, ...
+        'baseSpeedLimit', baseSpeedLimit, 'thetaRampEnd', thetaRampEnd, 'sample_dt', trajOpts.sample_dt, ...
+        'horizon_time', streamingHorizonTime, 'step_time', streamingStepTime, 'debug', streamingDebug, ...
+        'mode', streamingMode);
+    syncOut = wbc.stream_tracking_with_buffer(streamArgs);
+    streamArgsDiag = streamArgs;
+else
+    syncOut = wbc.sync_base_and_arm(baseWaypointsRef, thetaRef, arcLen, refTimes, refPositionsWorld, refRPYWorld, ...
+        armTrajectoryRef, baseLimits, baseSpeedLimit, thetaRampEnd);
+end
 
 armTimesTrack = syncOut.armTimes;
 armTrajectoryTrack = syncOut.armTrajectoryInitial;
@@ -517,13 +552,33 @@ scaleHistoryDiag = [];
 if isfield(syncDiag, 'scaleHistory')
     scaleHistoryDiag = syncDiag.scaleHistory;
 end
+syncDebugField = struct();
+if isfield(syncOut, 'debug')
+    syncDebugField = syncOut.debug;
+end
+windowSummaryField = struct();
+if isfield(syncOut, 'windowSummary')
+    windowSummaryField = syncOut.windowSummary;
+end
+streamModeField = string(streamingMode);
+if isfield(syncOut, 'streamMode') && ~isempty(syncOut.streamMode)
+    streamModeField = string(syncOut.streamMode);
+end
+streamReplayField = struct();
+if isfield(syncOut, 'streamReplay')
+    streamReplayField = syncOut.streamReplay;
+end
 diagnostics.sync = struct('scaleFactor', scaleFactor, ...
                           'basePoseTrack', poseHistoryTrack, ...
                           'armTimes', armTimesTrack, ...
                           'thetaRefTimeline', thetaRefSyncTrack, ...
                           'baseVelocity', struct('v', vBaseTrack, 'omega', omegaBaseTrack), ...
                           'directionSign', directionSignFull, ...
-                          'scaleHistory', scaleHistoryDiag);
+                          'scaleHistory', scaleHistoryDiag, ...
+                          'debug', syncDebugField, ...
+                          'streamMode', streamModeField, ...
+                          'windowSummary', windowSummaryField, ...
+                          'streamReplay', streamReplayField);
 diagnostics.sync.desiredEETrack = desiredEETrack;
 diagnostics.sync.desiredRPYTrack = desiredRPYTrack;
 diagnostics.retime = retimeInfo;
@@ -535,6 +590,11 @@ diagnostics.ikInfos = results.ikInfos;
 diagnostics.flags = struct('trackingError', maxEEErrorTracking > 0.05, ...
                            'jointLimitActivity', any(ikJointLimitFlags), ...
                            'ikNonConverged', any(~ikConvergedFlags));
+diagnostics.syncInputs = syncInputs;
+diagnostics.streamArgs = streamArgsDiag;
+diagnostics.armTrajectoryNominal = armTrajectoryNominal;
+diagnostics.armTrajectoryRef = armTrajectoryRef;
+diagnostics.poseTformsBase = poseTformsBase;
 
 if coder.target('MATLAB')
     assignin('base', 'rt_results', results);
