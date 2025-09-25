@@ -1,0 +1,16 @@
+float32 base_speed_max
+float32 base_yaw_rate_max
+float32 base_yaw_deviation_max
+float32 base_yaw_deviation_mean
+float32 ee_error_max
+float32 ee_error_mean
+float32 ee_error_max_total
+float32 ee_error_mean_total
+float32[] ee_speed
+float32[] ee_accel
+float32[] ee_jerk
+float32[] arm_velocity
+float32[] arm_acceleration
+float32[] cmd_velocity_longitudinal
+float32[] cmd_velocity_lateral
+float32[] cmd_yaw_rate

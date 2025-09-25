@@ -1,0 +1,8 @@
+float32 scale_factor
+float32[] scale_history
+float32[] direction_sign
+float32 base_speed_limit
+float32 base_yaw_rate_limit
+float32 ramp_base_speed_limit
+float32 ramp_base_yaw_rate_limit
+float32 theta_ramp_end

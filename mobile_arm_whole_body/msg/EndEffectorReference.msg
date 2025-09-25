@@ -1,0 +1,9 @@
+builtin_interfaces/Duration[] time_from_start
+geometry_msgs/Pose[] desired
+geometry_msgs/Pose[] actual
+float32[] position_error_norm
+float32[] orientation_error_norm
+float32 max_error_position
+float32 mean_error_position
+float32 max_error_position_tracking
+float32 mean_error_position_tracking

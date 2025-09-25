@@ -1,0 +1,8 @@
+std_msgs/Header header
+string source_id
+trajectory_msgs/JointTrajectory arm_trajectory
+mobile_arm_whole_body/BaseProfile base_profile
+mobile_arm_whole_body/StageInfo[] stages
+mobile_arm_whole_body/EndEffectorReference ee_reference
+mobile_arm_whole_body/SyncStatus sync
+mobile_arm_whole_body/WholeBodyMetrics metrics

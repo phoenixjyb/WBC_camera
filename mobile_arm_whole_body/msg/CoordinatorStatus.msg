@@ -1,0 +1,22 @@
+std_msgs/Header header
+
+uint8 STATE_IDLE=0
+uint8 STATE_ARM_RAMP=1
+uint8 STATE_CHASSIS_RAMP=2
+uint8 STATE_TRACKING=3
+uint8 STATE_ERROR=255
+
+uint8 state
+float32 state_progress
+builtin_interfaces/Duration state_elapsed
+builtin_interfaces/Duration state_remaining
+string active_request_id
+string last_event
+mobile_arm_whole_body/StageInfo current_stage
+mobile_arm_whole_body/WholeBodyMetrics metrics
+mobile_arm_whole_body/SyncStatus sync
+bool tracking_warning
+bool ik_warning
+bool joint_limit_warning
+bool base_limit_warning
+bool collision_warning

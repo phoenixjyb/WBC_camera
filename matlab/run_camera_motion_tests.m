@@ -8,18 +8,19 @@ addpath(thisDir);
 
 sources = ["dolly_forward", "orbit_left", "crane_up", "pan_tilt", "demo_arc", "demo_line"];
 traj_duration = 8.0;
-enable_animation = false;
 
 results_table = struct('source', {}, 'maxJointVel', {}, 'maxBaseSpeed', {}, 'duration', {});
 
 for idx = 1:numel(sources)
-    traj_source = sources(idx); %#ok<NASGU>
-    fprintf('\n=== Running trajectory: %s ===\n', traj_source);
-    rt_whole_body_controller;
-    res = rt_results;
+    fprintf('\n=== Running trajectory: %s ===\n', sources(idx));
+    opts = struct('traj_source', sources(idx), ...
+                  'traj_duration', traj_duration, ...
+                  'enable_animation', false, ...
+                  'enable_visualization', false);
+    res = rt_whole_body_controller(opts);
     maxJointVel = max(abs(res.armVelocities), [], 1);
     maxBaseSpeed = max(abs(res.baseCmd(:,1)));
-    results_table(idx).source = traj_source;
+    results_table(idx).source = sources(idx);
     results_table(idx).maxJointVel = maxJointVel;
     results_table(idx).maxBaseSpeed = maxBaseSpeed;
     results_table(idx).duration = res.armTimes(end);

@@ -1,0 +1,17 @@
+# Goal
+string request_id
+geometry_msgs/PoseStamped[] ee_waypoints
+trajectory_msgs/JointTrajectory seed_arm
+mobile_arm_whole_body/BaseProfile seed_base
+mobile_arm_whole_body/WholeBodyCommand preset_command
+bool allow_replan
+bool record_diagnostics
+---
+# Result
+bool success
+string message
+mobile_arm_whole_body/WholeBodyCommand executed_command
+mobile_arm_whole_body/WholeBodyMetrics final_metrics
+---
+# Feedback
+mobile_arm_whole_body/CoordinatorStatus status

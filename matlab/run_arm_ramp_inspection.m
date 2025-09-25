@@ -5,21 +5,20 @@
 clearvars; clc;
 
 % Trajectory overrides ---------------------------------------------------------
-traj_source = 'file';
-traj_file = '1_pull_world.json';
-traj_duration = 12;
-traj_scale = 1.0;
-use_gik = true;
+opts = struct();
+opts.traj_source = 'file';
+opts.traj_file = '1_pull_world.json';
+opts.traj_duration = 12;
+opts.traj_scale = 1.0;
+opts.use_gik = true;
 
 % Disable default animation so we can render a slow, ramp-only video later.
-enable_animation = false;
+opts.enable_animation = false;
+opts.enable_visualization = false;
 
 % Run the full controller to populate ramp metadata and synchronized results.
-rt_whole_body_controller;
-
-% Retrieve outputs from the base workspace.
-rt_results = evalin('base', 'rt_results');
-rampInfo = rt_results.baseInitialization;
+[rt_results, diagnostics] = rt_whole_body_controller(opts);
+rampInfo = diagnostics.rampInfo;
 if rampInfo.armSteps == 0 || isempty(rampInfo.armJointTrajectory)
     error('run_arm_ramp_inspection:MissingRamp', 'Arm ramp trajectory is empty.');
 end

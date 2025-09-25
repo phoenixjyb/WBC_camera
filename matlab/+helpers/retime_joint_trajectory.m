@@ -1,4 +1,4 @@
-function [tSamples, qSamples, qdSamples, info] = retime_joint_trajectory(waypoints, opts)
+function [tSamples, qSamples, qdSamples, info] = retime_joint_trajectory(waypoints, opts) %#codegen
 arguments
     waypoints {mustBeNumeric, mustBeNonempty}
     opts.MaxVelocity (1,:) double {mustBePositive} = ones(1, size(waypoints,2))
@@ -24,6 +24,10 @@ for k = 1:M-1
 end
 
 info = struct('segmentTimes', segmentTimes, 'arrivalTimes', [0 cumsum(segmentTimes)]);
+
+coder.varsize('tSamples', [1, inf], [0 1]);
+coder.varsize('qSamples', [inf, numJoints], [1 0]);
+coder.varsize('qdSamples', [inf, numJoints], [1 0]);
 
 tSamples = 0;
 qSamples = waypoints(1,:);
