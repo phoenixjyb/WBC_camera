@@ -8,7 +8,7 @@ def generate_launch_description():
 
     moveit_config = (
         MoveItConfigsBuilder('mobile_arm', package_name='mobile_arm_whole_body')
-        .robot_description(file_path='urdf/arm_on_car_center_rotZ_neg90.urdf')
+        .robot_description(file_path='urdf/arm_on_car_center_rotZ_n90_center.urdf')
         .robot_description_semantic(file_path='srdf/arm_on_car_center_whole_body.srdf')
         .planning_pipelines(file_path='config/planning_pipelines.yaml')
         .kinematics(file_path='config/kinematics.yaml')

@@ -3,7 +3,7 @@
 Whole-body (base + arm) MoveIt2 demo for a diff-drive chassis with a 6-DoF arm and a planar virtual joint.
 
 ## Contents
-- `urdf/arm_on_car_center_rotZ_neg90.urdf` — Arm mounted at the car center frame with a -90° Z rotation.
+- `urdf/arm_on_car_center_rotZ_n90_center.urdf` — Arm mounted at the car center frame with updated alignment.
 - `srdf/arm_on_car_center_whole_body.srdf` — Adds a planar `virtual_joint` (odom→chassis_center_link) and groups: `manipulator`, `mobile_base`, `whole_body`.
 - `config/` — Kinematics, OMPL pipeline, and MoveIt FakeController config.
 - `launch/whole_body_demo.launch.py` — Starts robot_state_publisher, move_group, RViz (MotionPlanning), and a static TF `odom→chassis_center_link` (identity for demo).

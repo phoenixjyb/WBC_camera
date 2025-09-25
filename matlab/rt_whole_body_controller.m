@@ -100,7 +100,7 @@ end
 %% Load robot model
 thisDir = fileparts(mfilename('fullpath'));
 addpath(thisDir); % ensure helper packages/functions are reachable
-urdfPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'urdf', 'arm_on_car_center_rotZ_neg90.urdf');
+urdfPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'urdf', 'arm_on_car_center_rotZ_n90_center.urdf');
 robot = importrobot(urdfPath, 'DataFormat', 'struct');
 robot.Gravity = [0 0 -9.81];
 armJointNames = {'left_arm_joint1','left_arm_joint2','left_arm_joint3', ...

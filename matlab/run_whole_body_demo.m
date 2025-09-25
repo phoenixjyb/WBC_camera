@@ -40,7 +40,7 @@ end
 
 if haveResults && strlength(stage_animation_file) > 0
     thisDir = fileparts(mfilename('fullpath'));
-    urdfPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'urdf', 'arm_on_car_center_rotZ_neg90.urdf');
+    urdfPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'urdf', 'arm_on_car_center_rotZ_n90_center.urdf');
     robot = importrobot(urdfPath, 'DataFormat', 'struct');
     robot.Gravity = [0 0 -9.81];
     animateArgs = {'VideoFile', stage_animation_file, 'VideoFrameRate', 30, ...

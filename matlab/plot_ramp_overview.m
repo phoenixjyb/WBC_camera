@@ -28,7 +28,7 @@ end
 % Load robot model to obtain meshes and home EE pose
 thisDir = fileparts(mfilename('fullpath'));
 addpath(thisDir); % make sure helpers on path
-urdfPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'urdf', 'arm_on_car_center_rotZ_neg90.urdf');
+urdfPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'urdf', 'arm_on_car_center_rotZ_n90_center.urdf');
 robot = importrobot(urdfPath, 'DataFormat', 'struct');
 robot.Gravity = [0 0 -9.81];
 armEEName = 'left_gripper_link';
