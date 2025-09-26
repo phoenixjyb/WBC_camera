@@ -102,6 +102,8 @@ thisDir = fileparts(mfilename('fullpath'));
 addpath(thisDir); % ensure helper packages/functions are reachable
 urdfPath = fullfile(thisDir, '..', 'mobile_arm_whole_body', 'urdf', 'arm_on_car_center_rotZ_n90_center.urdf');
 robot = importrobot(urdfPath, 'DataFormat', 'struct');
+worldObstacles = load_planar_obstacles_safe();
+[robot, virtualObstacleBodies] = attach_planar_obstacles(robot, worldObstacles);
 robot.Gravity = [0 0 -9.81];
 armJointNames = {'left_arm_joint1','left_arm_joint2','left_arm_joint3', ...
                  'left_arm_joint4','left_arm_joint5','left_arm_joint6'};
@@ -118,12 +120,17 @@ rampBaseYawRateMax = 0.5; % rad/s yaw limit during chassis warm-up
 trackingBaseSpeedMax = 0.6;
 trackingBaseYawRateMax = 0.5; % rad/s yaw limit during tracking phase
 
-collisionAvoidanceDefault = configure_arm_collision_avoidance(robot, thisDir);
+collisionAvoidanceDefault = configure_arm_collision_avoidance(robot, thisDir, worldObstacles);
 if ~isfield(gikOptions, 'CollisionAvoidance') || isempty(gikOptions.CollisionAvoidance)
     gikOptions.CollisionAvoidance = collisionAvoidanceDefault;
 else
     gikOptions.CollisionAvoidance = normalize_collision_avoidance_entries(gikOptions.CollisionAvoidance);
 end
+obstacleDistanceConstraints = build_distance_constraints_for_obstacles(eeName, virtualObstacleBodies, worldObstacles, 0.02);
+if ~isempty(obstacleDistanceConstraints)
+    gikOptions.DistanceConstraints = [gikOptions.DistanceConstraints, obstacleDistanceConstraints];
+end
+
 rampCollisionDefs = gikOptions.CollisionAvoidance;
 
 if useGeneralizedIK
@@ -198,7 +205,7 @@ else
 end
 
 [baseWaypointsAug, thetaRefAug, rawBaseWaypointsAug, refPositionsAug, refRPYAug, refTimesAug, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, robot, armJointNames, homeEEPosition, homeEERPY, homeBasePose, rampBaseSpeedMax, rampBaseYawRateMax, thetaRefNominal(1), rampCollisionDefs);
+    prepend_ramp_segment(baseWaypointsNominal, thetaRefNominal, rawBaseWaypoints, refPositionsWorld, refRPYWorld, refTimes, trajOpts.sample_dt, robot, armJointNames, homeEEPosition, homeEERPY, homeBasePose, rampBaseSpeedMax, rampBaseYawRateMax, thetaRefNominal(1), rampCollisionDefs, worldObstacles);
 
 baseWaypointsNominalFull = baseWaypointsAug;
 rawBaseWaypointsFull = rawBaseWaypointsAug;
@@ -729,7 +736,7 @@ end
 end
 
 function [baseWaypointsOut, thetaRefOut, rawBaseWaypointsOut, refPositionsOut, refRPYOut, refTimesOut, rampInfo] = ...
-    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, robot, armJointNames, homeEEPos, homeEERPY, homeBasePose, rampBaseSpeedMax, rampBaseYawRateMax, desiredYawTarget, collisionAvoidanceDefs)
+    prepend_ramp_segment(baseWaypointsIn, thetaRefIn, rawBaseWaypointsIn, refPositionsIn, refRPYIn, refTimesIn, sampleDt, robot, armJointNames, homeEEPos, homeEERPY, homeBasePose, rampBaseSpeedMax, rampBaseYawRateMax, desiredYawTarget, collisionAvoidanceDefs, worldObstacles)
 
 if nargin < 10 || isempty(robot)
     error('prepend_ramp_segment requires robot model input.');
@@ -754,6 +761,10 @@ if nargin < 16 || isempty(desiredYawTarget)
 end
 if nargin < 17 || isempty(collisionAvoidanceDefs)
     collisionAvoidanceDefs = {};
+end
+
+if nargin < 18 || isempty(worldObstacles)
+    worldObstacles = [];
 end
 
 homePose = homeBasePose(:)';
@@ -888,15 +899,19 @@ plannerOpts = struct('StepSize', 0.05, 'Wheelbase', 0.5, 'MaxSteer', deg2rad(30)
     'GoalPosTol', 0.01, 'GoalYawTol', deg2rad(5), 'MaxIterations', 5000, ...
     'SpeedLimit', rampBaseSpeedMax, 'MaxYawRate', rampBaseYawRateMax);
 
-obstacles = [];
-if exist('chassis_obstacles', 'file') == 2
-    try
-        obstacles = chassis_obstacles();
-    catch ME
-        warning('prepend_ramp_segment:ObstacleConfig', ...
-            'Failed to load chassis obstacles (%s). Continuing without obstacles.', ME.message);
-        obstacles = [];
+if isempty(worldObstacles)
+    obstacles = [];
+    if exist('chassis_obstacles', 'file') == 2
+        try
+            obstacles = chassis_obstacles();
+        catch ME
+            warning('prepend_ramp_segment:ObstacleConfig', ...
+                'Failed to load chassis obstacles (%s). Continuing without obstacles.', ME.message);
+            obstacles = [];
+        end
     end
+else
+    obstacles = worldObstacles;
 end
 if ~isempty(obstacles)
     plannerOpts.Obstacles = obstacles;
@@ -1497,7 +1512,7 @@ qBest = qCandidates(bestIdx, :);
 seedSelection = seedIndices(bestIdx);
 end
 
-function collisionEntries = configure_arm_collision_avoidance(~, thisDir)
+function collisionEntries = configure_arm_collision_avoidance(~, thisDir, planarObstacles)
 %CONFIGURE_ARM_COLLISION_AVOIDANCE Build default collision-avoidance entries.
 collisionEntries = {};
 
@@ -1522,6 +1537,28 @@ else
         'Collision mesh %s not found. Continuing with self-collision only.', chassisMeshPath);
 end
 
+planarDefs = planarObstacles;
+if isempty(planarDefs) && exist('chassis_obstacles', 'file') == 2
+    try
+        planarDefs = chassis_obstacles();
+    catch ME
+        warning('rt_whole_body_controller:ObstacleConversion', ...
+            'Failed to convert chassis obstacles for collision avoidance (%s).', ME.message);
+        planarDefs = [];
+    end
+end
+if ~isempty(planarDefs)
+    try
+        planarEnv = convert_planar_obstacles_to_collision(planarDefs);
+        if ~isempty(planarEnv)
+            envObjects = [envObjects, planarEnv]; %#ok<AGROW>
+        end
+    catch ME
+        warning('rt_whole_body_controller:ObstacleConversion', ...
+            'Failed to convert chassis obstacles for collision avoidance (%s).', ME.message);
+    end
+end
+
 collisionEntry = struct();
 collisionEntry.Environment = envObjects;
 collisionEntry.SelfCollisions = true;
@@ -1529,6 +1566,164 @@ collisionEntry.NumSamples = 8;
 collisionEntry.Weights = 1.0;
 
 collisionEntries = {collisionEntry};
+end
+
+function obstacles = load_planar_obstacles_safe()
+%LOAD_PLANAR_OBSTACLES_SAFE Wrapper around chassis_obstacles with error handling.
+obstacles = [];
+if exist('chassis_obstacles', 'file') ~= 2
+    return;
+end
+try
+    obstacles = chassis_obstacles();
+catch ME
+    warning('rt_whole_body_controller:ObstacleConfig', ...
+        'Failed to load chassis obstacles (%s). Continuing without obstacles.', ME.message);
+    obstacles = [];
+end
+end
+
+function [robotOut, bodyNames] = attach_planar_obstacles(robotIn, obstacles)
+%ATTACH_PLANAR_OBSTACLES Add fixed bodies representing obstacles to robot tree.
+robotOut = robotIn;
+bodyNames = {};
+if nargin < 2 || isempty(obstacles)
+    return;
+end
+obsArray = obstacles(:);
+bodyNames = cell(1, numel(obsArray));
+for idx = 1:numel(obsArray)
+    obs = obsArray(idx);
+    bodyName = sprintf('wb_obs_%d', idx);
+    jointName = sprintf('%s_joint', bodyName);
+    body = rigidBody(bodyName);
+    joint = rigidBodyJoint(jointName, 'fixed');
+    origin = derive_obstacle_center(obs);
+    setFixedTransform(joint, trvec2tform(origin));
+    body.Joint = joint;
+    addBody(robotOut, body, robotOut.BaseName);
+    bodyNames{idx} = bodyName;
+end
+end
+
+function distCells = build_distance_constraints_for_obstacles(eeName, obstacleBodyNames, obstacles, margin)
+%BUILD_DISTANCE_CONSTRAINTS_FOR_OBSTACLES Keep EE away from obstacle bodies.
+distCells = {};
+if nargin < 4 || isempty(margin)
+    margin = 0.02;
+end
+if isempty(obstacleBodyNames) || isempty(obstacles)
+    return;
+end
+if isstring(obstacleBodyNames)
+    obstacleBodyNames = cellstr(obstacleBodyNames);
+end
+obsArray = obstacles(:);
+numConstraints = min(numel(obstacleBodyNames), numel(obsArray));
+for idx = 1:numConstraints
+    bodyName = obstacleBodyNames{idx};
+    if isempty(bodyName)
+        continue;
+    end
+    obs = obsArray(idx);
+    radius = 0.10;
+    if isfield(obs, 'radius') && ~isempty(obs.radius)
+        radius = max(double(obs.radius), 1e-3);
+    end
+    minDist = radius + margin;
+    distObj = constraintDistanceBounds(eeName);
+    distObj.ReferenceBody = bodyName;
+    distObj.Bounds = [minDist, minDist + 5.0];
+    distCells{end+1} = distObj; %#ok<AGROW>
+end
+end
+
+function origin = derive_obstacle_center(obs)
+%DERIVE_OBSTACLE_CENTER Compute obstacle center in world coordinates.
+origin = [0, 0, 0];
+if isfield(obs, 'origin') && ~isempty(obs.origin)
+    originVals = double(obs.origin(:)');
+    origin(1:min(numel(originVals),3)) = originVals(1:min(numel(originVals),3));
+elseif isfield(obs, 'position') && ~isempty(obs.position)
+    posVals = double(obs.position(:)');
+    origin(1:min(numel(posVals),3)) = posVals(1:min(numel(posVals),3));
+elseif isfield(obs, 'center') && ~isempty(obs.center)
+    centerVals = double(obs.center(:)');
+    origin(1:min(numel(centerVals),2)) = centerVals(1:min(numel(centerVals),2));
+end
+height = 0.0;
+if isfield(obs, 'height') && ~isempty(obs.height)
+    height = max(double(obs.height), 0.0);
+end
+if height > 0
+    origin(3) = origin(3) + height/2;
+end
+end
+
+function envObjects = convert_planar_obstacles_to_collision(obsDefs)
+%CONVERT_PLANAR_OBSTACLES_TO_COLLISION Promote planar obstacle defs to collision geometry.
+envObjects = {};
+if nargin < 1 || isempty(obsDefs)
+    return;
+end
+if ~isstruct(obsDefs)
+    error('rt_whole_body_controller:InvalidObstacleStruct', ...
+        'Chassis obstacles must be provided as a struct or struct array.');
+end
+obsArray = obsDefs(:);
+supportsCylinder = exist('collisionCylinder', 'class') == 8 || exist('collisionCylinder', 'file') == 2;
+supportsSphere = exist('collisionSphere', 'class') == 8 || exist('collisionSphere', 'file') == 2;
+if ~supportsCylinder && ~supportsSphere
+    warning('rt_whole_body_controller:CollisionGeometryUnavailable', ...
+        'No collision primitives available; skipping obstacle environment.');
+    return;
+end
+for idx = 1:numel(obsArray)
+    obs = obsArray(idx);
+    if ~isfield(obs, 'type') || isempty(obs.type)
+        obs.type = 'circle';
+    end
+    switch lower(string(obs.type))
+        case {'circle','disc','disk'}
+            if ~isfield(obs, 'center') || numel(obs.center) < 2
+                error('rt_whole_body_controller:ObstacleCenterMissing', ...
+                    'Circular obstacles must define a 2-D center.');
+            end
+            center2d = double(obs.center(:)');
+            radius = 0.10;
+            if isfield(obs, 'radius') && ~isempty(obs.radius)
+                radius = max(double(obs.radius), 1e-3);
+            end
+            height = 0.10;
+            if isfield(obs, 'height') && ~isempty(obs.height)
+                height = max(double(obs.height), 0.02);
+            end
+            origin = [center2d(1:2), 0.0];
+            if isfield(obs, 'origin') && ~isempty(obs.origin)
+                originVals = double(obs.origin(:)');
+                if numel(originVals) >= 3
+                    origin = originVals(1:3);
+                else
+                    origin(1:numel(originVals)) = originVals;
+                end
+            elseif isfield(obs, 'position') && ~isempty(obs.position)
+                posVals = double(obs.position(:)');
+                origin(1:min(numel(posVals),3)) = posVals(1:min(numel(posVals),3));
+            end
+            if supportsCylinder
+                geom = collisionCylinder(radius, height);
+                cylinderCenter = [origin(1), origin(2), origin(3) + height/2];
+                geom.Pose = trvec2tform(cylinderCenter);
+            else
+                geom = collisionSphere(radius);
+                sphereCenter = [origin(1), origin(2), origin(3) + radius];
+                geom.Pose = trvec2tform(sphereCenter);
+            end
+            envObjects{end+1} = geom; %#ok<AGROW>
+        otherwise
+            % Unsupported obstacle type for collision avoidance; ignore.
+    end
+end
 end
 
 function entriesOut = normalize_collision_avoidance_entries(entriesIn)

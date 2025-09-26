@@ -135,6 +135,10 @@ numEntries = numel(entries);
 objects = cell(1, numEntries);
 for k = 1:numEntries
     entry = entries{k};
+    if isa(entry, 'constraintDistanceBounds')
+        objects{k} = entry;
+        continue;
+    end
     if iscell(entry)
         entry = entry{1};
     end
