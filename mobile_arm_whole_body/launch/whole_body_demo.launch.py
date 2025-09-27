@@ -60,15 +60,23 @@ def generate_launch_description():
         package='moveit_ros_move_group',
         executable='move_group',
         output='screen',
-        parameters=[moveit_config.to_dict(),
-                    {'publish_robot_description_semantic': True},
-                    {'allow_trajectory_execution': True}]
+        parameters=[
+            moveit_config.to_dict(),
+            moveit_config.joint_limits,
+            moveit_config.planning_pipelines
+        ]
     )
 
     rviz = Node(
         package='rviz2',
         executable='rviz2',
         arguments=['-d', str(pkg / 'config' / 'moveit.rviz')],
+        parameters=[
+            moveit_config.robot_description,
+            moveit_config.robot_description_semantic,
+            moveit_config.robot_description_kinematics,
+            moveit_config.joint_limits
+        ],
         output='screen',
         condition=rviz_condition
     )

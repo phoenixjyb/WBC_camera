@@ -678,18 +678,4 @@
   
   
   <link name="chassis_center_link"/>
-  <link name="odom_link"/>
-
-  <joint name="world_to_odom" type="fixed">
-    <parent link="world"/>
-    <child link="odom_link"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-  </joint>
-
-  <joint name="world_joint" type="planar">
-    <parent link="odom_link"/>
-    <child link="chassis_center_link"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>
-  </joint>
 </robot>
