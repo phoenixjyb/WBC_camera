@@ -1,0 +1,46 @@
+digraph RosGraph {
+  rankdir=LR;
+  node [shape=ellipse, style=filled, fillcolor=lightgray];
+
+  TrajectoryIngestor [label="trajectory_ingestor\nNode"];
+  WholeBodySupervisor [label="whole_body_supervisor\nNode"];
+  WholeBodyPlanner [label="whole_body_planner\nNode"];
+  BasePlanner [label="base_planner\nNode"];
+  ArmTrajectoryPublisher [label="arm_trajectory_publisher\nNode"];
+  BaseMotionCommander [label="base_motion_commander\nNode"];
+  ObstacleManager [label="obstacle_manager\nNode"];
+
+  node [shape=box, style=""];
+  camera_target [label="camera_path/target"];
+  camera_active [label="camera_path/active"];
+  camera_status [label="camera_path/status"];
+  arm_plan_topic [label="whole_body/arm_plan"];
+  arm_command_topic [label="whole_body/arm_command"];
+  base_plan_topic [label="whole_body/base_plan"];
+  cmd_vel_topic [label="whole_body/cmd_vel"];
+  odom_topic [label="whole_body/odom"];
+  obstacle_grid_topic [label="whole_body/obstacle_grid"];
+  supervisor_state_topic [label="whole_body/state"];
+
+  camera_target -> TrajectoryIngestor;
+  TrajectoryIngestor -> camera_active;
+  TrajectoryIngestor -> camera_status;
+  camera_active -> WholeBodySupervisor;
+  WholeBodySupervisor -> WholeBodyPlanner [label="/whole_body/plan_arm_ramp\n/plan_tracking_segment"];
+  WholeBodySupervisor -> BasePlanner [label="/whole_body/plan_base_ramp"];
+  ObstacleManager -> obstacle_grid_topic;
+  obstacle_grid_topic -> BasePlanner;
+  ObstacleManager -> WholeBodyPlanner [label="Collision Objects", style=dashed];
+  WholeBodyPlanner -> arm_plan_topic;
+  WholeBodyPlanner -> base_plan_topic;
+  BasePlanner -> base_plan_topic;
+  arm_plan_topic -> ArmTrajectoryPublisher;
+  ArmTrajectoryPublisher -> arm_command_topic;
+  base_plan_topic -> BaseMotionCommander;
+  BaseMotionCommander -> cmd_vel_topic;
+  odom_topic -> BaseMotionCommander;
+  WholeBodySupervisor -> supervisor_state_topic;
+  WholeBodySupervisor -> TrajectoryIngestor [label="/camera_path/request_next"];
+  BasePlanner -> WholeBodySupervisor [label="Nominal speed/yaw", style=dashed];
+  WholeBodyPlanner -> WholeBodySupervisor [label="Phase state", style=dashed];
+}

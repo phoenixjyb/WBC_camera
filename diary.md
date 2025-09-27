@@ -18,6 +18,13 @@
 - Clamped chassis yaw rate to 0.5 rad/s during both ramp and tracking phases, resampling heading updates in the synchronizer so the warm-up segment no longer produces 90° frame-to-frame spins.
 - Re-ran the full pipeline with the new limits, refreshed plots/MP4s, and confirmed the tracked base yaw never exceeds the cap while the arm ramp clip stays in sync with the planned chassis path.
 
+## 2025-09-27
+- Replaced the `base_motion_commander` placeholder with a lookahead pure-pursuit tracker that blends curvature steering with yaw alignment, enforces slowdown/goal tolerances, and logs graceful completion when the chassis settles inside 5 cm/0.1 rad.
+- Extended `whole_body_planner_node` validation to capture colliding link pairs, penetration depth, and the offending base pose so failed tracking plans surface actionable diagnostics.
+- Centralised trajectory utilities (plan splitting, ramp skip detection) in a shared library and added gtests to guard the world-joint extraction and tolerance logic; updated `colcon` build/test scripts (`colcon build --packages-select mobile_arm_whole_body_control`, `colcon test --packages-select mobile_arm_whole_body_control --ctest-args -R test_trajectory_utils`).
+- Wired the supervisor to publish arm/base plans for ramp and tracking stages on `/whole_body/arm_plan` and `/whole_body/base_plan`, allowing the arm trajectory publisher and base commander nodes to consume real outputs instead of placeholders.
+- Added base/EE state tracking in the supervisor with `initial_*` parameters so ramp requests start from the last planned pose, introduced a tunable `base_goal_offset` heuristic, and ensured base goals derive from the active waypoint before tracking kicks in.
+
 ## Future To-Dos
 - Bias the chassis ramp end pose or allow a short arm correction so the warm-up EE pose matches the first desired waypoint, removing the ~6 cm XY jump at the tracking handoff.
 - Reduce the tracking-phase IK warnings by tuning joint limits, collision constraints, or trajectory smoothing once collision avoidance primitives are available in this MATLAB install.

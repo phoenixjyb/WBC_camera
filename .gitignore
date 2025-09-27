@@ -16,3 +16,14 @@ frames/
 
 # SolidWorks export folders
 cr_no_*
+
+# ROS 2 build artifacts
+build/
+install/
+log/
+
+# Local tooling
+.marscode/
+tools/__pycache__/
+__pycache__/
+*.pyc
