@@ -1,0 +1,17 @@
+# Request
+geometry_msgs/Pose target_pose
+# Relaxed XY tolerance (meters)
+float32 xy_tolerance
+# Desired sample period for resulting trajectory
+float32 sample_dt
+# Maximum solver time (seconds)
+float32 planning_timeout
+# Enforce orientation tracking during ramp
+bool enforce_orientation
+---
+# Response
+bool success
+string message
+trajectory_msgs/JointTrajectory trajectory
+# Estimated execution duration (seconds)
+float32 estimated_duration

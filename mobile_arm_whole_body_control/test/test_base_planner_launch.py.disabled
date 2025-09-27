@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+import math
+import os
+import unittest
+from pathlib import Path
+
+import launch
+import launch_ros.actions
+import launch_testing.actions
+import numpy as np
+import pytest
+import rclpy
+from rclpy.node import Node
+
+from mobile_arm_whole_body_interfaces.srv import PlanBaseRamp
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import OccupancyGrid
+
+pytest.skip('Launch tests disabled in sandbox environment', allow_module_level=True)
+
+
+def make_disc_grid(cx, cy, radius, res=0.05, width=200, height=200, origin=(-5.0, -5.0)):
+    grid = OccupancyGrid()
+    grid.header.frame_id = 'odom'
+    grid.info.resolution = res
+    grid.info.width = width
+    grid.info.height = height
+    grid.info.origin.position.x = origin[0]
+    grid.info.origin.position.y = origin[1]
+    grid.info.origin.orientation.w = 1.0
+    grid.data = [0] * (width * height)
+
+    for y in range(height):
+        for x in range(width):
+            wx = origin[0] + (x + 0.5) * res
+            wy = origin[1] + (y + 0.5) * res
+            if (wx - cx) ** 2 + (wy - cy) ** 2 <= radius ** 2:
+                grid.data[y * width + x] = 100
+    return grid
+
+
+@pytest.mark.launch_test
+def generate_test_description():
+    pytest.skip('Launch tests disabled in sandbox environment')
+    return launch.LaunchDescription(), {}
+
+
+class TestBasePlanner(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        rclpy.init()
+
+    @classmethod
+    def tearDownClass(cls):
+        rclpy.shutdown()
+
+    def setUp(self):
+        self.node = Node('base_planner_client')
+        self.client = self.node.create_client(PlanBaseRamp, '/whole_body/plan_base_ramp')
+        if not self.client.wait_for_service(timeout_sec=5.0):
+            self.fail('Planner service not available')
+
+    def tearDown(self):
+        self.client.destroy()
+        self.node.destroy_node()
+
+    def _call_plan(self, start, goal, grid=None):
+        req = PlanBaseRamp.Request()
+        req.start = start
+        req.goal = goal
+        req.planning_timeout = 1.0
+        req.allow_reverse = True
+        if grid is not None:
+            req.static_obstacles = grid
+        future = self.client.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=5.0)
+        self.assertTrue(future.done(), 'Service call timed out')
+        return future.result()
+
+    def _make_pose(self, x, y, frame='odom'):
+        pose = PoseStamped()
+        pose.header.frame_id = frame
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        pose.pose.orientation.w = 1.0
+        return pose
+
+    def test_straight_line_no_obstacle(self):
+        start = self._make_pose(-0.5, 0.0)
+        goal = self._make_pose(0.5, 0.0)
+        resp = self._call_plan(start, goal)
+        self.assertTrue(resp.success, resp.message)
+        self.assertGreater(len(resp.path.poses), 1)
+
+    def test_disc_obstacle_detour(self):
+        grid = make_disc_grid(cx=0.0, cy=0.0, radius=0.2)
+        start = self._make_pose(-0.5, 0.0)
+        goal = self._make_pose(0.5, 0.0)
+        resp = self._call_plan(start, goal, grid=grid)
+        self.assertTrue(resp.success, resp.message)
+        xs = [pose.pose.position.x for pose in resp.path.poses]
+        ys = [pose.pose.position.y for pose in resp.path.poses]
+        r = np.hypot(xs, ys)
+        self.assertTrue(np.all(r > 0.2 - 1e-2), 'Path enters obstacle disc')
+
+
+if __name__ == '__main__':
+    pytest.main()
+os.environ.setdefault('ROS_LOG_DIR', str(Path('analysis/results').resolve()))

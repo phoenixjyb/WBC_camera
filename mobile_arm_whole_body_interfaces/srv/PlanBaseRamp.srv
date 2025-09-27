@@ -1,0 +1,17 @@
+# Request
+geometry_msgs/PoseStamped start
+geometry_msgs/PoseStamped goal
+# Optional static obstacle map; leave data empty if unused
+nav_msgs/OccupancyGrid static_obstacles
+# Maximum allowed solve time (seconds)
+float32 planning_timeout
+# Allow reversing motion during ramp
+bool allow_reverse
+---
+# Response
+bool success
+string message
+nav_msgs/Path path
+# Suggested velocity (m/s) and yaw rate (rad/s) limits for execution
+float32 nominal_linear_speed
+float32 nominal_yaw_rate

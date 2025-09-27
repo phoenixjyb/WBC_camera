@@ -1,0 +1,19 @@
+# Request
+# Sequence of EE targets to track (ordered)
+geometry_msgs/Pose[] target_poses
+# Current robot state
+geometry_msgs/PoseStamped current_ee
+geometry_msgs/PoseStamped current_base
+# Desired sample period for synchronized trajectory (seconds)
+float32 sample_dt
+# Maximum planning time (seconds)
+float32 planning_timeout
+# Optional: enforce orientation tracking throughout
+bool enforce_orientation
+---
+# Response
+bool success
+string message
+trajectory_msgs/JointTrajectory arm_trajectory
+nav_msgs/Path base_path
+mobile_arm_whole_body_interfaces/TrackingPhaseState phase_state

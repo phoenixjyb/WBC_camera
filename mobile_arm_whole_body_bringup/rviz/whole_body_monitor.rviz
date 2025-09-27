@@ -1,0 +1,157 @@
+Panels:
+  - Class: rviz/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /TF1
+        - /RobotModel1
+        - /PlanningScene1
+        - /Path1
+        - /MarkerArray1
+      Splitter Ratio: 0.5
+    Tree Height: 601
+  - Class: rviz/Selection
+    Name: Selection
+  - Class: rviz/Tool Properties
+    Expanded:
+      - /2D Nav Goal1
+      - /Publish Point1
+    Name: Tool Properties
+    Splitter Ratio: 0.5886790156364441
+  - Class: rviz/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz/Grid
+      Color: 160; 160; 160
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.4
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree:
+        {} 
+      Update Interval: 0
+      Value: true
+    - Alpha: 0.5
+      Class: rviz/RobotModel
+      Collision Enabled: false
+      Enabled: true
+      Links:
+        All Links Enabled: true
+      Name: RobotModel
+      Robot Description: robot_description
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
+    - Class: moveit_rviz_plugin/PlanningScene
+      Enabled: true
+      Name: PlanningScene
+      Planning Scene Topic: /move_group/monitored_planning_scene
+      Robot Description: robot_description
+      Scene Geometry:
+        Scene Geometry: true
+      Value: true
+    - Class: rviz/Path
+      Color: 25; 255; 0
+      Enabled: true
+      Name: Base Path
+      Topic: /whole_body/base_plan
+      Value: true
+      Alpha: 1
+      Buffer Length: 1
+      Line Style: Billboards
+      Line Width: 0.05
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /collision_object_markers
+      Name: MarkerArray
+      Namespaces:
+        {} 
+      Queue Size: 100
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Default Light: true
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+      Hide Inactive Objects: true
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+    - Class: rviz/2D Nav Goal
+    - Class: rviz/2D Pose Estimate
+    - Class: rviz/PublishPoint
+      Single click: true
+  Value: true
+  Views:
+    Current:
+      Class: rviz/ThirdPersonFollower
+      Distance: 5
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Name: Current View
+      Pitch: 0.5
+      Target Frame: odom
+      Value: ThirdPersonFollower
+      Yaw: 0.0
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 1011
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd0000000400000000000002a600000203fc0200000006fb0000001200530065006c0065006300740069006f006e00000001e3000000bb0000005b00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001c40000019b000001850000017afb0000000a0056006900650077007302000003a0000000bc000001850000017afb000000120020000000000000000000000002c100000203fb0000000c0049006d0061006700650000000000ffffffff0000000000000000fb0000000c004c006f006700730000000000ffffffff0000000000000000fb00000028002000280000000000000000000003a0000000bc0000000000000000fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730200000000000001e3000001670000000000000000fb000000100044006900730070006c006100790073010000003c00000203000000b000fffffffb0000000a0049006d0061006700650000000000ffffffff0000000000000000fb00000014005200650063005f00560069006500770000000188000001450000010100fffffffb0000001c004d00610072006b00650072004100720072006100790000000000ffffffff000000000000000000000001000001860000020300000000000000000000000100000000000000040000000400000000000000040000000800000000000000000000000400000000000000000000000400000000000000000000000400000000000000
+  Selection:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 1920
+  X: 0
+  Y: 0
