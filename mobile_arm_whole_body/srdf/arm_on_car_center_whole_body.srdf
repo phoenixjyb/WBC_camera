@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<robot name="left_arm_extracted">
+<robot name="chassis_with_single_arm">
   <virtual_joint name="world_joint" type="planar" parent_frame="odom" child_link="chassis_center_link"/>
   <group name="manipulator">
     <chain base_link="left_arm_base_link" tip_link="left_gripper_link"/>

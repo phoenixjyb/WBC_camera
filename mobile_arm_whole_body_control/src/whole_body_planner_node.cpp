@@ -37,8 +37,7 @@
 namespace mobile_arm_whole_body_control
 {
 
-class WholeBodyPlannerNode : public rclcpp::Node,
-                              public std::enable_shared_from_this<WholeBodyPlannerNode>
+class WholeBodyPlannerNode : public rclcpp::Node
 {
 public:
   explicit WholeBodyPlannerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())

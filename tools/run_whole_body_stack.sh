@@ -67,6 +67,19 @@ else
 fi
 
 if [[ "${SKIP_BUILD}" == false ]]; then
+  # Clean stale build/install directories that block ament symlink creation
+  for stale in \
+    "${WORKSPACE_DIR}/build/mobile_arm_whole_body_interfaces" \
+    "${WORKSPACE_DIR}/install/mobile_arm_whole_body_interfaces" \
+    "${WORKSPACE_DIR}/build/mobile_arm_whole_body" \
+    "${WORKSPACE_DIR}/install/mobile_arm_whole_body"
+  do
+    if [[ -e "${stale}" && ! -L "${stale}" ]]; then
+      echo "==> Removing stale directory ${stale}" >&2
+      rm -rf "${stale}"
+    fi
+  done
+
   echo "==> Building workspace (colcon build --symlink-install ${BUILD_ARGS[*]})"
   colcon build --symlink-install "${BUILD_ARGS[@]}"
 else

@@ -17,6 +17,10 @@ frames/
 # SolidWorks export folders
 cr_no_*
 
+# rosbag outputs
+*.db3
+whole_body_demo/
+
 # ROS 2 build artifacts
 build/
 install/

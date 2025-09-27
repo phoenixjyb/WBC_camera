@@ -1,11 +1,9 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, ExecuteProcess
-from launch.actions import TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, TimerAction
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -85,14 +83,16 @@ def generate_launch_description():
         }]
     )
 
+    rviz_arg = DeclareLaunchArgument('rviz', default_value='true', description='Launch RViz monitor')
     rviz = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
         arguments=['-d', get_package_share_directory('mobile_arm_whole_body_bringup') + '/rviz/whole_body_monitor.rviz'],
-        output='screen'
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('rviz'))
     )
-
+    record_bag_arg = DeclareLaunchArgument('record_bag', default_value='false', description='Record rosbag of core topics')
     bag_record = ExecuteProcess(
         cmd=['ros2', 'bag', 'record', '-o', 'whole_body_demo',
              '/whole_body/arm_plan',
@@ -100,10 +100,13 @@ def generate_launch_description():
              '/whole_body/state',
              '/whole_body/cmd_vel',
              '/whole_body/obstacle_grid'],
-        output='screen'
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('record_bag'))
     )
 
     return LaunchDescription([
+        rviz_arg,
+        record_bag_arg,
         moveit_demo,
         trajectory_ingestor,
         supervisor,
