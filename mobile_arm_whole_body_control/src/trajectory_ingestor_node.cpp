@@ -17,7 +17,7 @@ public:
   TrajectoryIngestorNode()
   : rclcpp::Node("trajectory_ingestor")
   {
-    auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
     target_sub_ = create_subscription<CameraPoseTarget>(
       "camera_path/target", qos,
       std::bind(&TrajectoryIngestorNode::on_target_received, this, std::placeholders::_1));
